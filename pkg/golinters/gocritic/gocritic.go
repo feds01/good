@@ -66,7 +66,7 @@ func (w *goCriticWrapper) init(logger logutils.Log, settings *config.GoCriticSet
 	}
 
 	w.once.Do(func() {
-		err := readFilesOnce(checkers.InitEmbeddedRules)
+		err := checkers.InitEmbeddedRules()
 		if err != nil {
 			logger.Fatalf("%s: %v: setting an explicit GOROOT can fix this problem", linterName, err)
 		}
