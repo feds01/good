@@ -32,6 +32,9 @@ type Context struct {
 type DependencyLoader interface {
 	// LoadExportData sets pkg.ExportFile.
 	LoadExportData(pkg *packages.Package) error
+
+	// LoadCompiledGoFiles sets pkg.CompiledGoFiles to the files with cgo processed.
+	LoadCompiledGoFiles(pkg *packages.Package) error
 }
 
 func (c *Context) Settings() *config.LintersSettings {

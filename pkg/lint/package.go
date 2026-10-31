@@ -2,9 +2,12 @@ package lint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/build"
+	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,12 +74,25 @@ func (l *PackageLoader) Load(ctx context.Context, linters []*linter.Config) (pkg
 func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
 	l.prepareBuildContext()
 
-	// Export data makes `go list` compile every dependency, so it is loaded on demand by LoadExportData.
-	loadMode &^= packages.NeedExportFile
+	// Export data makes `go list` compile every dependency, and compiled files (also requested by the types sizes)
+	// make it run the C compiler for every cgo dependency.
+	// Both are skipped here: the export data is loaded on demand by LoadExportData,
+	// and dependencies are type-checked from their original files.
+	isLazyExport := loadMode&packages.NeedExportFile != 0
+	if isLazyExport {
+		loadMode &^= packages.NeedExportFile | packages.NeedCompiledGoFiles | packages.NeedTypesSizes
+	}
 
 	pkgs, err := l.listPackages(ctx, loadMode)
 	if err != nil {
 		return nil, err
+	}
+
+	if isLazyExport {
+		pkgs, err = l.completeLazyPackages(ctx, loadMode, pkgs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if loadMode&packages.NeedSyntax == 0 {
@@ -95,6 +111,57 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 	}
 
 	return l.filterTestMainPackages(pkgs), nil
+}
+
+// completeLazyPackages sets the data that the lazy listing skips: the compiled files and the types sizes.
+func (l *PackageLoader) completeLazyPackages(ctx context.Context, loadMode packages.LoadMode,
+	pkgs []*packages.Package,
+) ([]*packages.Package, error) {
+	if hasCgoFiles(pkgs) {
+		// The analyzed packages need the cgo-processed files.
+		var err error
+
+		pkgs, err = l.listPackages(ctx, loadMode|packages.NeedCompiledGoFiles)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+			pkg.CompiledGoFiles = pkg.GoFiles
+		})
+	}
+
+	sizes, err := l.typesSizes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		pkg.TypesSizes = sizes
+	})
+
+	return pkgs, nil
+}
+
+// typesSizes returns the sizes go/packages would set with NeedTypesSizes, without listing the packages again.
+func (l *PackageLoader) typesSizes(ctx context.Context) (types.Sizes, error) {
+	conf := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedImports | packages.NeedTypesSizes,
+		Context:    ctx,
+		BuildFlags: l.makeBuildFlags(),
+		Logf:       l.debugf,
+	}
+
+	pkgs, err := packages.Load(conf, "unsafe")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load the types sizes: %w", err)
+	}
+
+	if len(pkgs) != 1 || pkgs[0].TypesSizes == nil {
+		return nil, errors.New("failed to load the types sizes")
+	}
+
+	return pkgs[0].TypesSizes, nil
 }
 
 func (l *PackageLoader) listPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
@@ -139,6 +206,33 @@ func (l *PackageLoader) LoadExportData(ctx context.Context, pkg *packages.Packag
 	return nil
 }
 
+// LoadCompiledGoFiles sets pkg.CompiledGoFiles to the files with cgo processed.
+func (l *PackageLoader) LoadCompiledGoFiles(ctx context.Context, pkg *packages.Package) error {
+	if pkg.ID != pkg.PkgPath {
+		return fmt.Errorf("package variant %s can't be loaded on its own", pkg.ID)
+	}
+
+	conf := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles,
+		Context:    ctx,
+		BuildFlags: l.makeBuildFlags(),
+		Logf:       l.debugf,
+	}
+
+	pkgs, err := packages.Load(conf, pkg.PkgPath)
+	if err != nil {
+		return fmt.Errorf("failed to load with go/packages: %w", err)
+	}
+
+	if len(pkgs) != 1 || len(pkgs[0].Errors) != 0 {
+		return fmt.Errorf("failed to process cgo files of %s: %v", pkg.PkgPath, pkgs)
+	}
+
+	pkg.CompiledGoFiles = pkgs[0].CompiledGoFiles
+
+	return nil
+}
+
 func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {
 	// Only with cgo processed, go list adds the runtime/cgo import to the cgo packages.
 	loadMode := packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedCompiledGoFiles
@@ -155,6 +249,28 @@ func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string,
 	})
 
 	return exportFiles, nil
+}
+
+// hasCgoFiles reports whether one of the packages imports "C".
+func hasCgoFiles(pkgs []*packages.Package) bool {
+	fset := token.NewFileSet()
+
+	for _, pkg := range pkgs {
+		for _, filename := range pkg.GoFiles {
+			file, err := parser.ParseFile(fset, filename, nil, parser.ImportsOnly)
+			if err != nil {
+				continue
+			}
+
+			for _, imp := range file.Imports {
+				if imp.Path.Value == `"C"` {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func (*PackageLoader) parseLoadedPackagesErrors(pkgs []*packages.Package) error {

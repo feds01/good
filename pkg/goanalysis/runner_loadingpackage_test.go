@@ -38,15 +38,25 @@ var cacheNoFactAnalyzer = &analysis.Analyzer{
 }
 
 type fakeDependencyLoader struct {
-	exportFile string
+	exportFile    string
+	processedFile string
 
 	exportDataCalls int
+	cgoFilesCalls   int
 }
 
 func (l *fakeDependencyLoader) LoadExportData(pkg *packages.Package) error {
 	l.exportDataCalls++
 
 	pkg.ExportFile = l.exportFile
+
+	return nil
+}
+
+func (l *fakeDependencyLoader) LoadCompiledGoFiles(pkg *packages.Package) error {
+	l.cgoFilesCalls++
+
+	pkg.CompiledGoFiles = []string{l.processedFile}
 
 	return nil
 }
@@ -200,4 +210,52 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 		assert.False(t, lp.actions[0].needAnalyzeSource, "cached facts are reused")
 		assert.True(t, lp.actions[2].needAnalyzeSource)
 	})
+}
+
+func Test_loadingPackage_loadFromSource_cgo(t *testing.T) {
+	cgoFile := writeGoFile(t, "cgo.go", "package dep\n\n// int x;\nimport \"C\"\n\nfunc Raw() {}\n")
+	processedFile := writeGoFile(t, "processed.go", "package dep\n\nfunc Processed() {}\n")
+
+	t.Run("processes the cgo files of a dependency", func(t *testing.T) {
+		pkg := newDependency(cgoFile)
+		depLoader := &fakeDependencyLoader{processedFile: processedFile}
+		lp := newDependencyLoadingPackage(pkg, nil, depLoader)
+
+		require.NoError(t, lp.loadFromSource(LoadModeTypesInfo))
+
+		assert.Equal(t, 1, depLoader.cgoFilesCalls)
+		assert.Equal(t, []string{processedFile}, pkg.CompiledGoFiles)
+		assert.Empty(t, pkg.Errors)
+		assert.NotNil(t, pkg.Types.Scope().Lookup("Processed"))
+	})
+
+	t.Run("leaves the files of an analyzed package alone", func(t *testing.T) {
+		pkg := newDependency(cgoFile)
+		depLoader := &fakeDependencyLoader{processedFile: processedFile}
+		lp := newDependencyLoadingPackage(pkg, nil, depLoader)
+		lp.isInitial = true
+
+		require.NoError(t, lp.loadFromSource(LoadModeSyntax))
+
+		assert.Zero(t, depLoader.cgoFilesCalls)
+		assert.Equal(t, []string{cgoFile}, pkg.CompiledGoFiles)
+	})
+
+	t.Run("ignores packages without cgo", func(t *testing.T) {
+		pkg := newDependency(processedFile)
+		depLoader := &fakeDependencyLoader{processedFile: processedFile}
+		lp := newDependencyLoadingPackage(pkg, nil, depLoader)
+
+		require.NoError(t, lp.loadFromSource(LoadModeSyntax))
+
+		assert.Zero(t, depLoader.cgoFilesCalls)
+	})
+}
+
+func Test_newCgoRuntimePackage(t *testing.T) {
+	pkg := newCgoRuntimePackage()
+
+	assert.True(t, pkg.Complete())
+	assert.Equal(t, "cgo", pkg.Name())
+	assert.NotNil(t, pkg.Scope().Lookup("Incomplete"))
 }

@@ -8,6 +8,7 @@ import (
 	"go/build"
 	"go/parser"
 	"go/scanner"
+	"go/token"
 	"go/types"
 	"os"
 	"reflect"
@@ -26,6 +27,8 @@ import (
 )
 
 const unsafePkgName = "unsafe"
+
+const cgoRuntimePath = "runtime/cgo"
 
 // https://github.com/golang/go/blob/go1.23.8/src/internal/types/errors/codes.go#L1484
 const tooNew = 151
@@ -120,7 +123,7 @@ func (lp *loadingPackage) analyze(ctx context.Context, cancel context.CancelFunc
 	}
 }
 
-func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
+func (lp *loadingPackage) parseSyntax() {
 	pkg := lp.pkg
 
 	// Many packages have few files, much fewer than there
@@ -137,6 +140,68 @@ func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
 		}
 		pkg.Syntax = append(pkg.Syntax, f)
 	}
+}
+
+// hasUnprocessedCgo reports whether the parsed files of a dependency still import "C":
+// the loader leaves the cgo processing of dependencies to the first linter that type-checks them.
+func (lp *loadingPackage) hasUnprocessedCgo() bool {
+	if lp.isInitial || lp.depLoader == nil {
+		return false
+	}
+
+	for _, file := range lp.pkg.Syntax {
+		for _, imp := range file.Imports {
+			if imp.Path.Value == `"C"` {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// processCgo replaces the files of a dependency by the cgo-processed ones, if it has cgo files.
+func (lp *loadingPackage) processCgo() {
+	pkg := lp.pkg
+
+	if len(pkg.Errors) != 0 || !lp.hasUnprocessedCgo() {
+		return
+	}
+
+	err := lp.depLoader.LoadCompiledGoFiles(pkg)
+	if err != nil {
+		pkg.Errors = append(pkg.Errors, packages.Error{
+			Pos:  "-",
+			Msg:  fmt.Sprintf("could not process cgo files: %s", err),
+			Kind: packages.ListError,
+		})
+
+		return
+	}
+
+	lp.parseSyntax()
+}
+
+// newCgoRuntimePackage returns a stand-in for runtime/cgo, which cgo processing imports after the imports are listed.
+// Only the Incomplete type is referenced by the generated code.
+func newCgoRuntimePackage() *types.Package {
+	pkg := types.NewPackage(cgoRuntimePath, "cgo")
+
+	typeName := types.NewTypeName(token.NoPos, pkg, "Incomplete", nil)
+	types.NewNamed(typeName, types.NewStruct(nil, nil), nil)
+	pkg.Scope().Insert(typeName)
+
+	pkg.MarkComplete()
+
+	return pkg
+}
+
+func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
+	pkg := lp.pkg
+
+	lp.parseSyntax()
+	lp.processCgo()
+
 	if len(pkg.Errors) != 0 {
 		pkg.IllTyped = true
 		return nil
@@ -180,6 +245,10 @@ func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
 			return nil, errors.New("cgo preprocessing failed")
 		}
 		imp := pkg.Imports[path]
+		if imp == nil && path == cgoRuntimePath {
+			return newCgoRuntimePackage(), nil
+		}
+
 		if imp == nil {
 			return nil, nil
 		}
