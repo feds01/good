@@ -27,7 +27,9 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   The baseline exists only in `good`: using it in CI means running `good` there, stock golangci-lint does not know `issues.baseline`.
 - Issues cache: a package with a type error or a failed analyzer no longer keeps the issues of the other packages from being
   cached. Only the packages that failed, are canceled, or import one of those are left out. A package that does not type-check
-  no longer cancels the analysis of the others (a type error is the only output then, as before).
+  no longer cancels the analysis of the others, so independent type errors in several packages are all reported (before, which
+  ones showed depended on scheduling). The packages that import a broken analyzed package do not repeat its error with a
+  `could not import` line; one that imports a broken package that is not analyzed itself still reports it.
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
 - revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of

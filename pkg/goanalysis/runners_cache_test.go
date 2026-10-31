@@ -73,10 +73,12 @@ func writeCacheTestModule(t *testing.T) string {
 	module := fmt.Sprintf("example.com/m%d", time.Now().UnixNano())
 
 	files := map[string]string{
-		"go.mod":                   fmt.Sprintf("module %s\n\ngo 1.21\n", module),
-		"bad/bad.go":               "package bad\n\nvar _ int = \"not an int\"\n",
-		"importsbad/importsbad.go": fmt.Sprintf("package importsbad\n\nimport \"%s/bad\"\n\nvar _ = bad.X\n", module),
-		"fail/fail.go":             "package fail\n",
+		"go.mod":                     fmt.Sprintf("module %s\n\ngo 1.21\n", module),
+		"bad/bad.go":                 "package bad\n\nvar _ int = \"not an int\"\n",
+		"importsbad/importsbad.go":   fmt.Sprintf("package importsbad\n\nimport \"%s/bad\"\n\nvar _ = bad.X\n", module),
+		"importsbad2/importsbad2.go": fmt.Sprintf("package importsbad2\n\nimport \"%s/bad\"\n\nvar _ = bad.X\n", module),
+		"otherbad/otherbad.go":       "package otherbad\n\nvar _ = undefinedName\n",
+		"fail/fail.go":               "package fail\n",
 	}
 
 	for i := range goodPkgCount {
@@ -200,19 +202,22 @@ func Test_runAnalyzers_typeErrorDoesNotStopOtherPackages(t *testing.T) {
 
 	byName := pkgsByName(pkgs)
 
-	var typeErrors int
+	var typeErrors []string
 
 	perPkg := map[*packages.Package]int{}
 
 	for _, issue := range issues {
 		perPkg[issue.Pkg]++
 
-		if issue.Pos.Filename != "" && filepath.Base(issue.Pos.Filename) == "bad.go" {
-			typeErrors++
+		if issue.FromLinter == "typecheck" {
+			typeErrors = append(typeErrors, filepath.Base(issue.Pos.Filename)+": "+issue.Text)
 		}
 	}
 
-	assert.Equal(t, 1, typeErrors)
+	// The importers of the broken package don't repeat its error, an unrelated type error is still reported.
+	require.Len(t, typeErrors, 2)
+	assert.Contains(t, typeErrors, "otherbad.go: undefined: undefinedName")
+	assert.Contains(t, typeErrors, "bad.go: cannot use \"not an int\" (untyped string constant) as int value in variable declaration")
 
 	for i := range goodPkgCount {
 		pkg := byName[fmt.Sprintf("g%d", i)]
