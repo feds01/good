@@ -16,7 +16,9 @@ import (
 	"github.com/golangci/golangci-lint/v2/pkg/result"
 )
 
-func saveIssuesToCache(allPkgs []*packages.Package, pkgsFromCache map[*packages.Package]bool,
+// saveIssuesToCache saves the issues of the packages that were analyzed.
+// The packages that have an unfinished package among their dependencies, themselves included, are skipped.
+func saveIssuesToCache(allPkgs []*packages.Package, pkgsFromCache, unfinishedPkgs map[*packages.Package]bool,
 	issues []*result.Issue, lintCtx *linter.Context, analyzers []*analysis.Analyzer,
 ) {
 	startedAt := time.Now()
@@ -60,8 +62,10 @@ func saveIssuesToCache(allPkgs []*packages.Package, pkgsFromCache map[*packages.
 		})
 	}
 
+	hasUnfinished := newUnfinishedDependencyChecker(unfinishedPkgs)
+
 	for _, pkg := range allPkgs {
-		if pkgsFromCache[pkg] {
+		if pkgsFromCache[pkg] || hasUnfinished(pkg) {
 			continue
 		}
 
@@ -73,6 +77,44 @@ func saveIssuesToCache(allPkgs []*packages.Package, pkgsFromCache map[*packages.
 	lintCtx.PkgCache.Close()
 
 	issuesCacheDebugf("Saved %d issues from %d packages to cache in %s", savedIssuesCount, len(allPkgs), time.Since(startedAt))
+}
+
+// newUnfinishedDependencyChecker returns a function that reports whether a package or one of its
+// transitive imports is in unfinishedPkgs.
+func newUnfinishedDependencyChecker(unfinishedPkgs map[*packages.Package]bool) func(pkg *packages.Package) bool {
+	if len(unfinishedPkgs) == 0 {
+		return func(*packages.Package) bool { return false }
+	}
+
+	memo := map[*packages.Package]bool{}
+
+	var check func(pkg *packages.Package) bool
+	check = func(pkg *packages.Package) bool {
+		if unfinishedPkgs[pkg] {
+			return true
+		}
+
+		if res, ok := memo[pkg]; ok {
+			return res
+		}
+
+		// Import cycles don't exist: the result is only set once the imports are checked.
+		res := false
+
+		for _, imp := range pkg.Imports {
+			if check(imp) {
+				res = true
+
+				break
+			}
+		}
+
+		memo[pkg] = res
+
+		return res
+	}
+
+	return check
 }
 
 func loadIssuesFromCache(pkgs []*packages.Package, lintCtx *linter.Context,

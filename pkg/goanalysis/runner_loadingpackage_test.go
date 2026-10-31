@@ -105,9 +105,6 @@ func newDependencyLoadingPackage(pkg *packages.Package, pkgCache *cache.Cache, d
 }
 
 func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
-	// The low-level cache is shared by the whole process, so it is set up once for all the sub-tests.
-	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
-
 	log := logutils.NewStderrLog("skip")
 
 	pkgCache, err := cache.NewCache(timeutils.NewStopwatch("pkgcache", log), log)
