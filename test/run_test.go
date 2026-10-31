@@ -147,6 +147,7 @@ func TestCgoOk(t *testing.T) {
 			"--timeout=3m",
 			"--show-stats=false",
 			"--default=all",
+			"--disable=gomoddirectives", // good's go.mod replaces its forked linters
 		).
 		WithTargetPath(testdataDir, "cgo").
 		Runner().
@@ -361,6 +362,7 @@ linters:
 		WithArgs(
 			"--show-stats=false",
 			"--default=all",
+			"--disable=gomoddirectives", // good's go.mod replaces its forked linters
 		).
 		WithTargetPath(testdataDir, "unsafe").
 		WithBinPath(binPath).
@@ -463,7 +465,7 @@ func TestEnableAllFastAndEnableCanCoexist(t *testing.T) {
 		},
 		{
 			desc:     "all",
-			args:     []string{"--default=all", "--enable=typecheck"},
+			args:     []string{"--default=all", "--enable=typecheck", "--disable=gomoddirectives"}, // good's go.mod replaces its forked linters
 			expected: []int{exitcodes.Success},
 		},
 	}
