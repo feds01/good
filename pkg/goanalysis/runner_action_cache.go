@@ -41,37 +41,13 @@ func (act *action) loadCacheFacts(reset bool) bool {
 	}
 
 	if reset {
-		act.objectFacts = make(map[objectFactKey]analysis.Fact)
-		act.packageFacts = make(map[packageFactKey]analysis.Fact)
-	}
-
-	if !act.loadPersistedFacts() {
-		return false
+		act.resetFacts()
 	}
 
 	// The cache only stores the facts a package produces about its own objects.
-	// The facts a package re-exports from its dependencies (see exportedFrom) are not persisted,
-	// to avoid duplicating them in every cache entry (which grows quadratically with the import graph).
-	// Instead, we rebuild them in memory here by inheriting from the dependencies,
-	// exactly like analyze() does for packages analyzed from source.
-	// This is safe because every dependency is fully analyzed (from cache or source) before this package is loaded,
-	// so their facts are already available.
-	act.inheritFactsFromDeps()
-
-	return true
-}
-
-// inheritFactsFromDeps rebuilds, in memory,
-// the facts re-exported from this action's dependencies (vertical edges: same analyzer, different package),
-// mirroring the inheritance performed by analyze() for packages analyzed from source.
-func (act *action) inheritFactsFromDeps() {
-	for _, dep := range act.Deps {
-		if dep.Package == act.Package || dep.Analyzer != act.Analyzer {
-			continue
-		}
-
-		inheritFacts(act, dep)
-	}
+	// The facts of the dependencies are read from their own actions (see factStore),
+	// which are fully analyzed (from cache or source) before this package is loaded.
+	return act.loadPersistedFacts()
 }
 
 func (act *action) persistFactsToCache() error {
@@ -146,7 +122,7 @@ func (act *action) loadPersistedFacts() bool {
 	for _, f := range facts {
 		if f.Path == "" { // this is a package fact
 			key := packageFactKey{pkg: act.Package.Types, typ: act.factType(f.Fact)}
-			act.packageFacts[key] = f.Fact
+			act.setPackageFact(key, f.Fact)
 			continue
 		}
 
@@ -165,7 +141,7 @@ func (act *action) loadPersistedFacts() bool {
 			continue
 		}
 		factKey := objectFactKey{obj, act.factType(f.Fact)}
-		act.objectFacts[factKey] = f.Fact
+		act.setObjectFact(factKey, f.Fact)
 	}
 
 	return true

@@ -33,7 +33,6 @@ var (
 
 	factsDebugf        = logutils.Debug(logutils.DebugKeyGoAnalysisFacts)
 	factsCacheDebugf   = logutils.Debug(logutils.DebugKeyGoAnalysisFactsCache)
-	factsInheritDebugf = logutils.Debug(logutils.DebugKeyGoAnalysisFactsInherit)
 	factsExportDebugf  = logutils.Debug(logutils.DebugKeyGoAnalysisFacts)
 	isFactsExportDebug = logutils.HaveDebugTag(logutils.DebugKeyGoAnalysisFactsExport)
 )
@@ -55,19 +54,21 @@ type runner struct {
 	passToPkg      map[*analysis.Pass]*packages.Package
 	passToPkgGuard sync.Mutex
 	sw             *timeutils.Stopwatch
+	factStores     map[*analysis.Analyzer]*factStore // filled while building the action graph
 }
 
 func newRunner(prefix string, logger logutils.Log, pkgCache *cache.Cache, loadGuard *load.Guard,
 	loadMode LoadMode, sw *timeutils.Stopwatch,
 ) *runner {
 	return &runner{
-		prefix:    prefix,
-		log:       logger,
-		pkgCache:  pkgCache,
-		loadGuard: loadGuard,
-		loadMode:  loadMode,
-		passToPkg: map[*analysis.Pass]*packages.Package{},
-		sw:        sw,
+		prefix:     prefix,
+		log:        logger,
+		pkgCache:   pkgCache,
+		loadGuard:  loadGuard,
+		loadMode:   loadMode,
+		passToPkg:  map[*analysis.Pass]*packages.Package{},
+		sw:         sw,
+		factStores: map[*analysis.Analyzer]*factStore{},
 	}
 }
 
@@ -159,6 +160,7 @@ func (r *runner) buildActionFactDeps(act *action, a *analysis.Analyzer, pkg *pac
 
 	act.objectFacts = make(map[objectFactKey]analysis.Fact)
 	act.packageFacts = make(map[packageFactKey]analysis.Fact)
+	act.factStore = r.factStoreFor(a)
 
 	paths := slices.Sorted(maps.Keys(pkg.Imports)) // for determinism
 
@@ -166,6 +168,9 @@ func (r *runner) buildActionFactDeps(act *action, a *analysis.Analyzer, pkg *pac
 		dep := r.makeAction(a, pkg.Imports[path], initialPkgs, actions, actAlloc)
 		act.Deps = append(act.Deps, dep)
 	}
+
+	// Deps is cleared once the package is analyzed, but the facts of the dependencies stay reachable until the dependants are done.
+	act.factDeps = act.Deps[len(a.Requires):]
 
 	// Need to register fact types for pkgcache proper gob encoding.
 	for _, f := range a.FactTypes {

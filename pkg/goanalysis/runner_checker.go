@@ -7,8 +7,6 @@
 package goanalysis
 
 import (
-	"bytes"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"go/types"
@@ -38,9 +36,15 @@ type action struct {
 	Diagnostics []analysis.Diagnostic
 	Duration    time.Duration // execution time of this step
 
-	pass         *analysis.Pass
+	pass *analysis.Pass
+
+	// The facts this action exported or loaded from the cache, about its own package only.
+	// The facts of the dependencies are read through factStore (see runner_facts.go).
 	objectFacts  map[objectFactKey]analysis.Fact
 	packageFacts map[packageFactKey]analysis.Fact
+
+	factStore *factStore
+	factDeps  []*action // vertical dependencies: same analyzer, imported packages
 
 	// NOTE(ldez) custom fields.
 	runner              *runner
@@ -100,22 +104,15 @@ func (act *action) analyze() {
 	}
 
 	// Plumb the output values of the dependencies
-	// into the inputs of this action.  Also facts.
+	// into the inputs of this action.
 	inputs := make(map[*analysis.Analyzer]any)
-	act.objectFacts = make(map[objectFactKey]analysis.Fact)
-	act.packageFacts = make(map[packageFactKey]analysis.Fact)
+	act.resetFacts()
 	for _, dep := range act.Deps {
 		if dep.Package == act.Package {
 			// Same package, different analysis (horizontal edge):
 			// in-memory outputs of prerequisite analyzers
 			// become inputs to this analysis pass.
 			inputs[dep.Analyzer] = dep.Result
-
-		} else if dep.Analyzer == act.Analyzer { // (always true)
-			// Same analysis, different package (vertical edge):
-			// serialized facts produced by prerequisite analysis
-			// become available to this analysis pass.
-			inheritFacts(act, dep)
 		}
 	}
 
@@ -128,8 +125,6 @@ func (act *action) analyze() {
 	// 			pkg.Name == "", pkg.PkgPath == "", pkg.Types == nil, pkg.Fset == nil, pkg.TypesSizes == nil))
 	// 	}
 	// }
-
-	factsDebugf("%s: Inherited facts in %s", act, time.Since(t0))
 
 	module := &analysis.Module{} // possibly empty (non nil) in go/analysis drivers.
 	if mod := act.Package.Module; mod != nil {
@@ -215,99 +210,6 @@ func (act *action) analyze() {
 	}
 }
 
-// NOTE(ldez) altered: logger; sanityCheck.
-// inheritFacts populates act.facts with
-// those it obtains from its dependency, dep.
-func inheritFacts(act, dep *action) {
-	const sanityCheck = false
-
-	for key, fact := range dep.objectFacts {
-		// Filter out facts related to objects
-		// that are irrelevant downstream
-		// (equivalently: not in the compiler export data).
-		if !exportedFrom(key.obj, dep.Package.Types) {
-			factsInheritDebugf("%v: discarding %T fact from %s for %s: %s", act, fact, dep, key.obj, fact)
-			continue
-		}
-
-		// Optionally serialize/deserialize fact
-		// to verify that it works across address spaces.
-		if sanityCheck {
-			encodedFact, err := codeFact(fact)
-			if err != nil {
-				act.runner.log.Panicf("internal error: encoding of %T fact failed in %v: %v", fact, act, err)
-			}
-			fact = encodedFact
-		}
-
-		factsInheritDebugf("%v: inherited %T fact for %s: %s", act, fact, key.obj, fact)
-
-		act.objectFacts[key] = fact
-	}
-
-	for key, fact := range dep.packageFacts {
-		// TODO: filter out facts that belong to
-		// packages not mentioned in the export data
-		// to prevent side channels.
-		//
-		// The Pass.All{Object,Package}Facts accessors expose too much:
-		// all facts, of all types, for all dependencies in the action
-		// graph. Not only does the representation grow quadratically,
-		// but it violates the separate compilation paradigm, allowing
-		// analysis implementations to communicate with indirect
-		// dependencies that are not mentioned in the export data.
-		//
-		// It's not clear how to fix this short of a rather expensive
-		// filtering step after each action that enumerates all the
-		// objects that would appear in export data, and deletes
-		// facts associated with objects not in this set.
-
-		// Optionally serialize/deserialize fact
-		// to verify that it works across address spaces
-		// and is deterministic.
-		if sanityCheck {
-			encodedFact, err := codeFact(fact)
-			if err != nil {
-				act.runner.log.Panicf("internal error: encoding of %T fact failed in %v", fact, act)
-			}
-			fact = encodedFact
-		}
-
-		factsInheritDebugf("%v: inherited %T fact for %s: %s", act, fact, key.pkg.Path(), fact)
-
-		act.packageFacts[key] = fact
-	}
-}
-
-// NOTE(ldez) altered: `new` is renamed to `newFact`.
-// codeFact encodes then decodes a fact,
-// just to exercise that logic.
-func codeFact(fact analysis.Fact) (analysis.Fact, error) {
-	// We encode facts one at a time.
-	// A real modular driver would emit all facts
-	// into one encoder to improve gob efficiency.
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(fact); err != nil {
-		return nil, err
-	}
-
-	// Encode it twice and assert that we get the same bits.
-	// This helps detect nondeterministic Gob encoding (e.g. of maps).
-	var buf2 bytes.Buffer
-	if err := gob.NewEncoder(&buf2).Encode(fact); err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(buf.Bytes(), buf2.Bytes()) {
-		return nil, fmt.Errorf("encoding of %T fact is nondeterministic", fact)
-	}
-
-	newFact := reflect.New(reflect.TypeOf(fact).Elem()).Interface().(analysis.Fact)
-	if err := gob.NewDecoder(&buf).Decode(newFact); err != nil {
-		return nil, err
-	}
-	return newFact, nil
-}
-
 // NOTE(ldez) no alteration.
 // exportedFrom reports whether obj may be visible to a package that imports pkg.
 // This includes not just the exported members of pkg, but also unexported
@@ -348,7 +250,7 @@ func (act *action) ObjectFact(obj types.Object, ptr analysis.Fact) bool {
 		panic("nil object")
 	}
 	key := objectFactKey{obj, act.factType(ptr)}
-	if v, ok := act.objectFacts[key]; ok {
+	if v, ok := act.lookupObjectFact(key); ok {
 		reflect.ValueOf(ptr).Elem().Set(reflect.ValueOf(v).Elem())
 		return true
 	}
@@ -368,7 +270,7 @@ func (act *action) exportObjectFact(obj types.Object, fact analysis.Fact) {
 	}
 
 	key := objectFactKey{obj, act.factType(fact)}
-	act.objectFacts[key] = fact // clobber any existing entry
+	act.setObjectFact(key, fact) // clobber any existing entry
 	if isFactsExportDebug {
 		objstr := types.ObjectString(obj, (*types.Package).Name)
 
@@ -387,6 +289,9 @@ func (act *action) AllObjectFacts() []analysis.ObjectFact {
 	for k, fact := range act.objectFacts {
 		facts = append(facts, analysis.ObjectFact{Object: k.obj, Fact: fact})
 	}
+	act.visitInheritedObjectFacts(func(k objectFactKey, fact analysis.Fact) {
+		facts = append(facts, analysis.ObjectFact{Object: k.obj, Fact: fact})
+	})
 	return facts
 }
 
@@ -400,7 +305,7 @@ func (act *action) PackageFact(pkg *types.Package, ptr analysis.Fact) bool {
 		panic("nil package")
 	}
 	key := packageFactKey{pkg, act.factType(ptr)}
-	if v, ok := act.packageFacts[key]; ok {
+	if v, ok := act.lookupPackageFact(key); ok {
 		reflect.ValueOf(ptr).Elem().Set(reflect.ValueOf(v).Elem())
 		return true
 	}
@@ -415,7 +320,7 @@ func (act *action) exportPackageFact(fact analysis.Fact) {
 	}
 
 	key := packageFactKey{act.pass.Pkg, act.factType(fact)}
-	act.packageFacts[key] = fact // clobber any existing entry
+	act.setPackageFact(key, fact) // clobber any existing entry
 
 	factsDebugf("%s: package %s has fact %s\n",
 		act.Package.Fset.Position(act.pass.Files[0].Pos()), act.pass.Pkg.Path(), fact)
@@ -440,6 +345,9 @@ func (act *action) AllPackageFacts() []analysis.PackageFact {
 	for k, fact := range act.packageFacts {
 		facts = append(facts, analysis.PackageFact{Package: k.pkg, Fact: fact})
 	}
+	act.visitInheritedPackageFacts(func(k packageFactKey, fact analysis.Fact) {
+		facts = append(facts, analysis.PackageFact{Package: k.pkg, Fact: fact})
+	})
 	return facts
 }
 

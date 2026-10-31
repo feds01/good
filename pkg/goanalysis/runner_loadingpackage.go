@@ -463,8 +463,7 @@ func (lp *loadingPackage) decUse(canClearTypes bool) {
 		if !lp.isInitial {
 			act.Package = nil
 		}
-		act.packageFacts = nil
-		act.objectFacts = nil
+		act.releaseFacts()
 	}
 	lp.actions = nil
 }
