@@ -22,9 +22,10 @@ Use a Go toolchain at least as new as the one your code targets (golangci-lint r
 go build -o good ./cmd/golangci-lint
 ```
 
-Do not build with `-trimpath`: revive type-checks with `go/importer`, which fails in a trimmed binary, so revive loses type
-information (for example `untyped string` instead of `string` in context-keys-type messages) and some of its rules go quiet.
-The binary is faster that way (about 80 CPU seconds less on a cold core/backend run) because that work is skipped.
+Build with `-trimpath`, as stock release builds are. Revive type-checks with `go/importer`, which fails in a trimmed binary, so that
+work is skipped: on a cold core/backend run this halves the wall time (about 10s against 19s) and removes about 90 CPU seconds of system
+time, with identical issue positions. The cost is wording: `untyped string` instead of `string` in context-keys-type messages.
+Revive rules that need type information can go quiet in a trimmed binary, on other code too.
 The Go patch version (1.27.1 against 1.27.3) makes no measurable difference.
 
 ## Verify
