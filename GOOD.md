@@ -36,7 +36,7 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   (`uniq-by-line`, `max-same-issues`, ...), `SortResults` breaks ties on linter, text and severity, and the summary
   lines no longer follow map order, so identical runs print identical JSON, cold or warm. canonicalheader no longer
   reports nothing on a package that uses both `http.Header` and `ResponseWriter.Header()` depending on map order
-  (`pkg/golinters/canonicalheader`). Of several issues on one line, `uniq-by-line` keeps the first linter by name (nolintlint
+  (`go.mod` replace of `github.com/golangci/canonicalheader` with `feds01/canonicalheader`). Of several issues on one line, `uniq-by-line` keeps the first linter by name (nolintlint
   last), then the leftmost.
 
 ## Build
