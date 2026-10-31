@@ -208,6 +208,19 @@ func TestCache_packageHash_invalidation(t *testing.T) {
 	}
 }
 
+func TestCache_packageHash_golden(t *testing.T) {
+	hashes := rootHashes(t, map[string]string{})
+
+	assert.Equal(t, "d872820361b0c8d28a9271f0b468263fd2e36a088e001754730f21d221303c4d", hashes[HashModeNeedOnlySelf])
+	assert.Equal(t, "458200c7f784f1045d76a0e6ecd7f68c781df5b3f0027ec570b5ceb173bbcb6f", hashes[HashModeNeedDirectDeps])
+	assert.Equal(t, "2f0618e85433028288775e9282794a68dae599e3af686e65263c28b7172c947a", hashes[HashModeNeedAllDeps])
+
+	actionID, err := setupCache(t).buildKey(writeModule(t, map[string]string{}), HashModeNeedAllDeps, "key")
+	require.NoError(t, err)
+
+	assert.Equal(t, "20b4d81f48e1e1df701806251a597b49930266f6e9e1c02c68a7e6e21578a46c", fmt.Sprintf("%x", actionID))
+}
+
 func TestCache_packageHash_concurrent(t *testing.T) {
 	root := writeModule(t, map[string]string{})
 
