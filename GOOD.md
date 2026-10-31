@@ -34,10 +34,14 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   reported instead), and an import that cannot be resolved is a `typecheck` error.
 - Deterministic output: issues are put in a total order before the processors that keep the first of several issues
   (`uniq-by-line`, `max-same-issues`, ...), `SortResults` breaks ties on linter, text and severity, and the summary
-  lines no longer follow map order, so identical runs print identical JSON, cold or warm. canonicalheader no longer
-  reports nothing on a package that uses both `http.Header` and `ResponseWriter.Header()` depending on map order
-  (`go.mod` replace of `github.com/golangci/canonicalheader` with `feds01/canonicalheader`). Of several issues on one line, `uniq-by-line` keeps the first linter by name (nolintlint
-  last), then the leftmost.
+  lines no longer follow map order, so identical runs print identical JSON, cold or warm.
+  - canonicalheader no longer reports nothing on a package that uses both `http.Header` and `ResponseWriter.Header()`,
+    which depended on map order (`go.mod` replace of `github.com/golangci/canonicalheader` with `feds01/canonicalheader`).
+  - Of several issues on one line, `uniq-by-line` keeps one from a real linter (first by name), else a formatter, else
+    nolintlint; then the leftmost. A formatter never hides a real issue, because `max-per-file-from-linter` would drop it.
+  - With limits (`max-same-issues`, `max-issues-per-linter`) the issues kept are the first N in file order, where stock
+    kept whatever the linters reported first. The output is a deterministic subset of the unlimited output, but not the
+    same subset as stock, so per-linter counts differ (`max-same-issues` counts texts shared by several linters).
 
 ## Build
 

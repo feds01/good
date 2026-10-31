@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
@@ -146,4 +147,70 @@ func TestWalkStringToIntMapSortedByValue_breaksTiesByKey(t *testing.T) {
 	})
 
 	assert.Equal(t, []string{"f", "a", "b", "c", "d", "e"}, walked)
+}
+
+func TestCanonicalOrder_formatterDoesNotHideARealIssue(t *testing.T) {
+	cfg := &config.Config{}
+
+	for seed := range uint64(50) {
+		issues := shuffled([]*result.Issue{
+			newOrderIssue("golines", "File is not properly formatted", 5, 1),
+			newOrderIssue("revive", "var-naming: AudienceIds should be AudienceIDs", 5, 9),
+			newOrderIssue("nolintlint", "unused directive", 5, 20),
+			newOrderIssue("gci", "File is not properly formatted", 1, 1),
+		}, seed)
+
+		issues, err := NewCanonicalOrder().Process(issues)
+		require.NoError(t, err)
+
+		issues, err = NewUniqByLine(true).Process(issues)
+		require.NoError(t, err)
+
+		issues, err = NewMaxPerFileFromLinter(cfg).Process(issues)
+		require.NoError(t, err)
+
+		var kept []string
+		for _, issue := range issues {
+			kept = append(kept, issue.FromLinter)
+		}
+
+		assert.Equal(t, []string{"gci", "revive"}, kept, "seed %d", seed)
+	}
+}
+
+func TestCanonicalOrder_ranksLintersFormattersThenNolintlint(t *testing.T) {
+	issues, err := NewCanonicalOrder().Process(shuffled([]*result.Issue{
+		newOrderIssue("zzz", "text", 2, 1),
+		newOrderIssue("nolintlint", "text", 2, 1),
+		newOrderIssue("gofmt", "text", 2, 1),
+		newOrderIssue("aaa", "text", 2, 1),
+		newOrderIssue("swaggo", "text", 2, 1),
+	}, 3))
+	require.NoError(t, err)
+
+	var linters []string
+	for _, issue := range issues {
+		linters = append(linters, issue.FromLinter)
+	}
+
+	assert.Equal(t, []string{"aaa", "zzz", "gofmt", "swaggo", "nolintlint"}, linters)
+}
+
+func TestCanonicalOrder_ordersByFixesWhenNothingElseDiffers(t *testing.T) {
+	newFixIssue := func(newText string) *result.Issue {
+		issue := newOrderIssue("revive", "text", 2, 1)
+		issue.SuggestedFixes = []analysis.SuggestedFix{{TextEdits: []analysis.TextEdit{{Pos: 1, End: 2, NewText: []byte(newText)}}}}
+
+		return issue
+	}
+
+	for _, input := range [][]*result.Issue{
+		{newFixIssue("b"), newFixIssue("a")},
+		{newFixIssue("a"), newFixIssue("b")},
+	} {
+		issues, err := NewCanonicalOrder().Process(input)
+		require.NoError(t, err)
+
+		assert.Equal(t, "a", string(issues[0].SuggestedFixes[0].TextEdits[0].NewText))
+	}
 }
