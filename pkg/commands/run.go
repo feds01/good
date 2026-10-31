@@ -643,10 +643,28 @@ func initHashSalt(logger logutils.Log, version string, cfg *config.Config) error
 	b.WriteString("golangci-lint-cache/v2")
 	b.Write(configSalt)
 	b.WriteString(goModSalt)
+	b.WriteString(computeCgoSalt())
 
 	cache.SetSalt(b)
 
 	return nil
+}
+
+// computeCgoSalt returns the cgo settings that change the Go declarations generated from the C code.
+// The dependencies are type-checked from their cgo files, which don't contain the settings.
+func computeCgoSalt() string {
+	var salt strings.Builder
+
+	for _, name := range []string{"CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CC", "CXX"} {
+		value := os.Getenv(name)
+		if value == "" {
+			continue
+		}
+
+		fmt.Fprintf(&salt, "%s=%s;", name, value)
+	}
+
+	return salt.String()
 }
 
 func computeBinarySalt(version string) ([]byte, error) {

@@ -216,6 +216,35 @@ func TestCache_packageHash_invalidation(t *testing.T) {
 	}
 }
 
+func TestCache_packageHash_otherFiles(t *testing.T) {
+	hashWithHeader := func(header string) string {
+		dir := t.TempDir()
+
+		goFile := filepath.Join(dir, "cgo.go")
+		require.NoError(t, os.WriteFile(goFile, []byte("package cgo\n"), 0o600))
+
+		headerFile := filepath.Join(dir, "cgo.h")
+		require.NoError(t, os.WriteFile(headerFile, []byte(header), 0o600))
+
+		pkg := &packages.Package{
+			PkgPath:         "example.com/cgo",
+			Module:          &packages.Module{Path: "example.com/cgo", Dir: dir},
+			CompiledGoFiles: []string{goFile},
+			OtherFiles:      []string{headerFile},
+		}
+
+		hash, err := setupCache(t).packageHash(pkg, HashModeNeedOnlySelf)
+		require.NoError(t, err)
+
+		return hash
+	}
+
+	original := hashWithHeader("int x;\n")
+
+	assert.Equal(t, original, hashWithHeader("int x;\n"))
+	assert.NotEqual(t, original, hashWithHeader("long x;\n"))
+}
+
 func TestCache_packageHash_golden(t *testing.T) {
 	hashes := rootHashes(t, map[string]string{})
 
