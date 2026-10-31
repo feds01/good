@@ -80,7 +80,23 @@ func runAnalyzers(cfg runAnalyzersConfig, lintCtx *linter.Context) ([]*result.Is
 	issues = append(issues, errIssues...)
 	issues = append(issues, buildAllIssues()...)
 
+	clearEmptyReplacements(issues)
+
 	return issues, nil
+}
+
+// clearEmptyReplacements makes a fresh result equal to one read back from the cache,
+// which does not keep empty slices: the JSON output would otherwise print "" or null depending on the cache.
+func clearEmptyReplacements(issues []*result.Issue) {
+	for _, issue := range issues {
+		for _, fix := range issue.SuggestedFixes {
+			for i := range fix.TextEdits {
+				if len(fix.TextEdits[i].NewText) == 0 {
+					fix.TextEdits[i].NewText = nil
+				}
+			}
+		}
+	}
 }
 
 func buildIssues(diags []*Diagnostic, linterNameBuilder func(diag *Diagnostic) string) []*result.Issue {

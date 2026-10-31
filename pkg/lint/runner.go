@@ -112,6 +112,9 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 			processors.NewExclusionRules(log.Child(logutils.DebugKeyExclusionRules), lineCache,
 				&cfg.Linters.Exclusions),
 
+			// Must be before the baseline, the Fixer and every processor that keeps the first of several issues.
+			processors.NewCanonicalOrder(),
+
 			processors.NewNolintFilter(log.Child(logutils.DebugKeyNolintFilter), fileCache, dbManager, enabledLinters),
 
 			diff,
