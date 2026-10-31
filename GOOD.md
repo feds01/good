@@ -20,21 +20,23 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   reported for analyzed packages; type errors still are. `go build` and the tests catch the others.
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
+- revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of
+  `github.com/mgechev/revive` with `feds01/revive`, branch `use-pass-types`). revive no longer type-checks
+  each package a second time, so `time-naming`, `var-declaration`, the `errorf` check on `t.Error(fmt.Sprintf(...))`
+  and `context-keys-type` give the same result in `-trimpath` and regular builds.
+  Like the other typed linters, revive does not run on a package that fails to type-check (a `typecheck` issue is
+  reported instead), and an import that cannot be resolved is a `typecheck` error.
 
 ## Build
 
 Use a Go toolchain at least as new as the one your code targets (golangci-lint refuses older ones):
 
 ```sh
-go build -trimpath -o good ./cmd/golangci-lint
+go build -o good ./cmd/golangci-lint
 ```
 
-Build with `-trimpath`, as stock release builds are, as an interim. Revive type-checks with `go/importer`, which fails in a trimmed
-binary, so that work is skipped: on a cold core/backend run this halves the wall time (about 10s against 19s) and removes about
-90 CPU seconds of system time. The cost is quiet: a trimmed binary does not report revive's `time-naming`, `var-declaration` and the
-`t.Error(fmt.Sprintf(...))` branch of `errorf`, and rewords `context-keys-type` (`untyped string` instead of `string`). Stock release
-builds have the same gap. The real fix is to make revive use the type information of the analysis pass.
-The Go patch version (1.27.1 against 1.27.3) makes no measurable difference.
+`-trimpath` is optional: revive uses the type information of the analysis pass, so its rules give the same result in
+both builds. The Go patch version (1.27.1 against 1.27.3) makes no measurable difference.
 
 ## Verify
 

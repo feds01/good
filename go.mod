@@ -245,3 +245,5 @@ replace github.com/golangci/revgrep => github.com/feds01/revgrep v0.0.0-20261031
 replace github.com/ashanbrown/forbidigo/v2 => github.com/feds01/forbidigo/v2 v2.0.0-20261031143152-73acef7ebb8f
 
 replace github.com/sanposhiho/wastedassign/v2 => github.com/feds01/wastedassign/v2 v2.0.0-20261031142043-28c4860b6c4e
+
+replace github.com/mgechev/revive => github.com/feds01/revive v0.0.0-20261031171758-8104a78be4a6

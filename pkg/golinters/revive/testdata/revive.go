@@ -3,10 +3,9 @@
 package testdata
 
 import (
+	"log"
 	"net/http"
 	"time"
-
-	"golang.org/x/xerrors"
 )
 
 // want +2 "exported: exported function SampleRevive should have comment or be unexported"
@@ -34,5 +33,5 @@ func testReviveComplexity(s string) { // want "cyclomatic: function testReviveCo
 }
 
 func testErrorStrings() {
-	_ = xerrors.New("Some error!") // want "error strings should not be capitalized or end with punctuation or a newline"
+	log.Fatal("Some error!") // want "error strings should not be capitalized or end with punctuation or a newline"
 }
