@@ -243,3 +243,5 @@ require (
 replace github.com/golangci/revgrep => github.com/feds01/revgrep v0.0.0-20261031134449-f0332cd67dc5
 
 replace github.com/ashanbrown/forbidigo/v2 => github.com/feds01/forbidigo/v2 v2.0.0-20261031143152-73acef7ebb8f
+
+replace github.com/sanposhiho/wastedassign/v2 => github.com/feds01/wastedassign/v2 v2.0.0-20261031142043-28c4860b6c4e
