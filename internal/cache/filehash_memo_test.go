@@ -275,6 +275,8 @@ func TestFileHashMemo_concurrentUse(t *testing.T) {
 	// Each run also hashes the same files from many goroutines.
 	var wg sync.WaitGroup
 
+	var wrongHashes atomic.Int32
+
 	for range 4 {
 		wg.Go(func() {
 			for range 5 {
@@ -286,8 +288,9 @@ func TestFileHashMemo_concurrentUse(t *testing.T) {
 					inner.Go(func() {
 						for _, file := range files {
 							actual, err := memo.hash(file, (&countingHasher{}).hash)
-							assert.NoError(t, err)
-							assert.Equal(t, expected[file], actual)
+							if err != nil || actual != expected[file] {
+								wrongHashes.Add(1)
+							}
 						}
 					})
 				}
@@ -299,6 +302,8 @@ func TestFileHashMemo_concurrentUse(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	assert.Zero(t, wrongHashes.Load())
 
 	leftovers, err := filepath.Glob(filepath.Join(memoDir, "*.tmp*"))
 	require.NoError(t, err)
