@@ -13,8 +13,8 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
 - Cold start: export data is built only for packages whose cached facts will be read, and the C code of cgo dependencies
   is processed only when a dependency is type-checked from source (branch `perf-cold-load`, `pkg/lint`, `pkg/goanalysis`).
   Cache keys now hash the original cgo files, the non-Go files of a package (headers, C and assembly files) and the cgo
-  environment (`CGO_CFLAGS`, `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, `CC`, `CXX`), so a header or flag change invalidates the package
-  and its dependants. Headers outside the package directory, and flags set with `go env -w`, are not hashed.
+  settings (`CGO_CFLAGS`, `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, `CC`, `CXX`, read with `go env`, so `go env -w` counts), so a header
+  or flag change invalidates the package and its dependants. Only headers outside the package directory are not hashed.
   A package that has no export data (it does not compile) is analyzed from source, so the output does not depend on the
   state of the lint cache. Errors that only the compiler reports, such as `missing function body`, are no longer
   reported for analyzed packages; type errors still are. `go build` and the tests catch the others.

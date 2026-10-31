@@ -643,28 +643,38 @@ func initHashSalt(logger logutils.Log, version string, cfg *config.Config) error
 	b.WriteString("golangci-lint-cache/v2")
 	b.Write(configSalt)
 	b.WriteString(goModSalt)
-	b.WriteString(computeCgoSalt())
+
+	cgoSalt, err := computeCgoSalt(context.Background())
+	if err != nil {
+		// The cgo settings only matter for the cache of packages with cgo.
+		logger.Warnf("Failed to calculate the cgo salt: %v", err)
+	}
+
+	b.WriteString(cgoSalt)
 
 	cache.SetSalt(b)
 
 	return nil
 }
 
-// computeCgoSalt returns the cgo settings that change the Go declarations generated from the C code.
+var cgoEnvNames = []string{"CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CC", "CXX"}
+
+// computeCgoSalt returns the cgo settings that change the Go declarations generated from the C code,
+// from `go env` so that `go env -w` is taken into account.
 // The dependencies are type-checked from their cgo files, which don't contain the settings.
-func computeCgoSalt() string {
-	var salt strings.Builder
-
-	for _, name := range []string{"CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CC", "CXX"} {
-		value := os.Getenv(name)
-		if value == "" {
-			continue
-		}
-
-		fmt.Fprintf(&salt, "%s=%s;", name, value)
+func computeCgoSalt(ctx context.Context) (string, error) {
+	values, err := goenv.Get(ctx, cgoEnvNames...)
+	if err != nil {
+		return "", fmt.Errorf("failed to read the cgo settings: %w", err)
 	}
 
-	return salt.String()
+	var salt strings.Builder
+
+	for _, name := range cgoEnvNames {
+		fmt.Fprintf(&salt, "%s=%s;", name, values[name])
+	}
+
+	return salt.String(), nil
 }
 
 func computeBinarySalt(version string) ([]byte, error) {
