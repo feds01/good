@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
 	"github.com/golangci/golangci-lint/v2/pkg/result"
 )
@@ -36,7 +37,7 @@ type FilenameUnadjuster struct {
 	loggedUnadjustments map[string]bool
 }
 
-func NewFilenameUnadjuster(pkgs []*packages.Package, log logutils.Log) *FilenameUnadjuster {
+func NewFilenameUnadjuster(pkgs []*packages.Package, fileCache *fsutils.FileCache, log logutils.Log) *FilenameUnadjuster {
 	m := adjustMap{m: map[string]posMapper{}}
 
 	startedAt := time.Now()
@@ -47,7 +48,7 @@ func NewFilenameUnadjuster(pkgs []*packages.Package, log logutils.Log) *Filename
 		wg.Go(func() {
 			for _, pkg := range chunk {
 				// It's important to call func here to run GC
-				processUnadjusterPkg(&m, pkg, log)
+				processUnadjusterPkg(&m, pkg, fileCache, log)
 			}
 		})
 	}
@@ -86,17 +87,23 @@ func (p *FilenameUnadjuster) Process(issues []*result.Issue) ([]*result.Issue, e
 
 func (*FilenameUnadjuster) Finish() {}
 
-func processUnadjusterPkg(m *adjustMap, pkg *packages.Package, log logutils.Log) {
+func processUnadjusterPkg(m *adjustMap, pkg *packages.Package, fileCache *fsutils.FileCache, log logutils.Log) {
 	fset := token.NewFileSet() // it's more memory efficient to not store all in one fset
 
 	for _, filename := range pkg.CompiledGoFiles {
 		// It's important to call func here to run GC
-		processUnadjusterFile(filename, m, log, fset)
+		processUnadjusterFile(filename, m, fileCache, log, fset)
 	}
 }
 
-func processUnadjusterFile(filename string, m *adjustMap, log logutils.Log, fset *token.FileSet) {
-	syntax, err := parser.ParseFile(fset, filename, nil, parser.ParseComments)
+func processUnadjusterFile(filename string, m *adjustMap, fileCache *fsutils.FileCache, log logutils.Log, fset *token.FileSet) {
+	src, err := fileCache.GetFileBytes(filename)
+	if err != nil {
+		// Error will be reported by typecheck
+		return
+	}
+
+	syntax, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
 		// Error will be reported by typecheck
 		return
