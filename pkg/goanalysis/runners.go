@@ -47,15 +47,7 @@ func runAnalyzers(cfg runAnalyzersConfig, lintCtx *linter.Context) ([]*result.Is
 		}
 	}
 
-	diags, errs, passToPkg := runner.run(cfg.getAnalyzers(), pkgsToAnalyze)
-
-	defer func() {
-		if len(errs) == 0 {
-			// If we try to save to cache even if we have compilation errors
-			// we won't see them on repeated runs.
-			saveIssuesToCache(pkgs, pkgsFromCache, issues, lintCtx, cfg.getAnalyzers())
-		}
-	}()
+	diags, errs, passToPkg, unfinishedPkgs := runner.run(cfg.getAnalyzers(), pkgsToAnalyze)
 
 	buildAllIssues := func() []*result.Issue {
 		var retIssues []*result.Issue
@@ -79,6 +71,9 @@ func runAnalyzers(cfg runAnalyzersConfig, lintCtx *linter.Context) ([]*result.Is
 
 	issues = append(issues, errIssues...)
 	issues = append(issues, buildAllIssues()...)
+
+	// The packages that failed are not saved, otherwise their errors would not be seen on repeated runs.
+	saveIssuesToCache(pkgs, pkgsFromCache, unfinishedPkgs, issues, lintCtx, cfg.getAnalyzers())
 
 	return issues, nil
 }

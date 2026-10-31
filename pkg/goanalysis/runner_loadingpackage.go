@@ -20,6 +20,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
+	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/pkgerrors"
 	"github.com/golangci/golangci-lint/v2/pkg/goutil"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
@@ -123,7 +124,10 @@ func (lp *loadingPackage) analyze(ctx context.Context, cancel context.CancelFunc
 	}
 
 	err := actsWg.Wait()
-	if err != nil {
+
+	// A package that doesn't type-check is reported as an issue, it has no effect on the analysis of the others.
+	var illTypedErr *pkgerrors.IllTypedError
+	if err != nil && !errors.As(err, &illTypedErr) {
 		cancel()
 	}
 }

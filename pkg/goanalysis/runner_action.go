@@ -29,6 +29,16 @@ func (actAlloc *actionAllocator) alloc() *action {
 	return act
 }
 
+// isDone reports whether the action ran, successfully or not.
+func (act *action) isDone() bool {
+	select {
+	case <-act.analysisDoneCh:
+		return true
+	default:
+		return false
+	}
+}
+
 func (act *action) waitUntilDependingAnalyzersWorked(ctx context.Context) {
 	for _, dep := range act.Deps {
 		if dep.Package == act.Package {
