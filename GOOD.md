@@ -61,6 +61,14 @@ go build -o good ./cmd/golangci-lint
 `-trimpath` is optional: revive uses the type information of the analysis pass, so its rules give the same result in
 both builds. The Go patch version (1.27.1 against 1.27.3) makes no measurable difference.
 
+## Release
+
+Releases are built by the `Release good` workflow (run it from the Actions tab or with
+`gh workflow run good-release.yml --ref good -f sha=<40-hex commit on good>`). It runs `scripts/build-dist.sh`, which
+builds `linux/amd64`, `darwin/arm64` and `darwin/amd64` tarballs and attests `checksums.txt`. The release is tagged
+`good-<first 12 of the sha>`, and `good version` reports the same string, so the lint cache is never shared between commits.
+The tarballs are reproducible: `scripts/build-dist.sh <sha>` on any machine gives the same sha256 as the release.
+
 ## Verify
 
 ```sh
