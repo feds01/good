@@ -62,7 +62,7 @@ func (act *action) persistFactsToCache() error {
 	// Facts about objects from other packages (inherited through this package's export data) are intentionally NOT persisted:
 	// doing so duplicates them in every cache entry along the import graph and makes the cache grow quadratically.
 	// When a package is restored from the cache,
-	// those re-exported facts are rebuilt in memory by inheriting from its dependencies (see inheritFactsFromDeps).
+	// those re-exported facts are read from the analyzer's shared fact store.
 
 	var facts []Fact
 

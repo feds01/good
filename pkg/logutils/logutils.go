@@ -67,10 +67,9 @@ const (
 	DebugKeyGoAnalysisIssuesCache = DebugKeyGoAnalysis + "/issues/cache"
 	DebugKeyGoAnalysisMemory      = DebugKeyGoAnalysis + "/memory"
 
-	DebugKeyGoAnalysisFacts        = DebugKeyGoAnalysis + "/facts"
-	DebugKeyGoAnalysisFactsCache   = DebugKeyGoAnalysisFacts + "/cache"
-	DebugKeyGoAnalysisFactsExport  = DebugKeyGoAnalysisFacts + "/export"
-	DebugKeyGoAnalysisFactsInherit = DebugKeyGoAnalysisFacts + "/inherit"
+	DebugKeyGoAnalysisFacts       = DebugKeyGoAnalysis + "/facts"
+	DebugKeyGoAnalysisFactsCache  = DebugKeyGoAnalysisFacts + "/cache"
+	DebugKeyGoAnalysisFactsExport = DebugKeyGoAnalysisFacts + "/export"
 )
 
 // Linters and Formatters.
