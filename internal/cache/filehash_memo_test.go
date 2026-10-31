@@ -2,8 +2,10 @@ package cache
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -209,6 +211,110 @@ func TestFileHashMemo_damagedFileIsIgnored(t *testing.T) {
 
 	assert.Equal(t, expected, actual)
 	assert.EqualValues(t, 2, hasher.calls.Load())
+}
+
+func TestFileHashMemo_truncatedFileIsIgnored(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	memoDir := t.TempDir()
+	workDir := t.TempDir()
+	file := writeTestFile(t, workDir, "a.go", "package a\n")
+
+	hasher := &countingHasher{}
+
+	first := newFileHashMemo(memoDir, workDir, settledClock())
+
+	expected, err := first.hash(file, hasher.hash)
+	require.NoError(t, err)
+
+	first.save()
+
+	shards, err := filepath.Glob(filepath.Join(memoDir, memoFilePrefix+"*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, shards)
+
+	for _, shard := range shards {
+		content, errRead := os.ReadFile(shard)
+		require.NoError(t, errRead)
+		require.Greater(t, len(content), 1)
+
+		for _, size := range []int{0, 1, len(content) / 2, len(content) - 1} {
+			require.NoError(t, os.WriteFile(shard, content[:size], 0o600))
+
+			memo := newFileHashMemo(memoDir, workDir, settledClock())
+
+			actual, errHash := memo.hash(file, hasher.hash)
+			require.NoError(t, errHash)
+
+			assert.Equal(t, expected, actual)
+		}
+	}
+
+	assert.EqualValues(t, 1+len(shards)*4, hasher.calls.Load(), "a cut-off memo is never used")
+}
+
+func TestFileHashMemo_concurrentUse(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	memoDir := t.TempDir()
+	workDir := t.TempDir()
+
+	files := make([]string, 20)
+	expected := make(map[string]fileHash)
+
+	for i := range files {
+		files[i] = writeTestFile(t, workDir, fmt.Sprintf("f%d.go", i), fmt.Sprintf("package f%d\n", i))
+
+		var err error
+
+		expected[files[i]], err = (&countingHasher{}).hash(files[i])
+		require.NoError(t, err)
+	}
+
+	// Several runs share the memo files at once, as when two linters run in different terminals.
+	// Each run also hashes the same files from many goroutines.
+	var wg sync.WaitGroup
+
+	for range 4 {
+		wg.Go(func() {
+			for range 5 {
+				memo := newFileHashMemo(memoDir, workDir, settledClock())
+
+				var inner sync.WaitGroup
+
+				for range 8 {
+					inner.Go(func() {
+						for _, file := range files {
+							actual, err := memo.hash(file, (&countingHasher{}).hash)
+							assert.NoError(t, err)
+							assert.Equal(t, expected[file], actual)
+						}
+					})
+				}
+
+				inner.Wait()
+				memo.save()
+			}
+		})
+	}
+
+	wg.Wait()
+
+	leftovers, err := filepath.Glob(filepath.Join(memoDir, "*.tmp*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+
+	hasher := &countingHasher{}
+
+	memo := newFileHashMemo(memoDir, workDir, settledClock())
+
+	for _, file := range files {
+		actual, errHash := memo.hash(file, hasher.hash)
+		require.NoError(t, errHash)
+		assert.Equal(t, expected[file], actual)
+	}
+
+	assert.Zero(t, hasher.calls.Load(), "the memo left by the concurrent runs is complete and readable")
 }
 
 func TestFileHashMemo_shards(t *testing.T) {
