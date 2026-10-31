@@ -19,7 +19,7 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
 Use a Go toolchain at least as new as the one your code targets (golangci-lint refuses older ones):
 
 ```sh
-go build -o good ./cmd/golangci-lint
+go build -trimpath -o good ./cmd/golangci-lint
 ```
 
 Build with `-trimpath`, as stock release builds are. Revive type-checks with `go/importer`, which fails in a trimmed binary, so that
