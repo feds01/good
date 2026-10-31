@@ -52,13 +52,13 @@ func (f *baselineFixture) issue(relativePath string, line int, linter, text stri
 	}
 }
 
-func (f *baselineFixture) options(isRecord bool, analyzed ...string) BaselineOptions {
+func (f *baselineFixture) options(isRecord bool, analyzed ...string) *BaselineOptions {
 	absolute := make([]string, 0, len(analyzed))
 	for _, relativePath := range analyzed {
 		absolute = append(absolute, filepath.Join(f.dir, filepath.FromSlash(relativePath)))
 	}
 
-	return BaselineOptions{
+	return &BaselineOptions{
 		FilePath: filepath.Join(f.dir, baselineFileName),
 		BasePath: f.dir,
 		Record:   isRecord,
@@ -66,7 +66,7 @@ func (f *baselineFixture) options(isRecord bool, analyzed ...string) BaselineOpt
 	}
 }
 
-func (f *baselineFixture) newProcessor(opts BaselineOptions) *Baseline {
+func (f *baselineFixture) newProcessor(opts *BaselineOptions) *Baseline {
 	f.t.Helper()
 
 	logger := logutils.NewStderrLog(logutils.DebugKeyEmpty)
@@ -317,7 +317,7 @@ func TestBaseline_positionsInMessagesDoNotMatter(t *testing.T) {
 	first := f.issue("a.go", 2, "dupl", "2-4 lines are duplicate of `"+f.dir+"/a.go:5-7`")
 	f.record([]*result.Issue{first}, addMode)
 
-	f.write("a.go", lines("package a", "// c", "func First() {", "\tcode()", "}", "func Second() {", "\tcode()", "}")...)
+	f.write("a.go", lines("// Package a.", "package a", "func First() {", "\tcode()", "}", "func Second() {", "\tcode()", "}")...)
 
 	moved := f.issue("a.go", 3, "dupl", "3-5 lines are duplicate of `"+f.dir+"/a.go:6-8`")
 
@@ -360,16 +360,16 @@ func TestBaseline_stale(t *testing.T) {
 }
 
 func TestBaseline_renamedFile(t *testing.T) {
-	oldLines := lines("package a",
-		"func f() {", "\tone()", "\ttwo()", "\tthree()", "\tfour()", "\tfive()", "}")
+	oldLines := lines("package a", "func f() {",
+		"\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "\tskip()", "\tfour()", "\tskip()", "\tfive()", "}")
 
 	oldIssues := func(f *baselineFixture, path string) []*result.Issue {
 		return []*result.Issue{
 			f.issue(path, 3, "errcheck", "unchecked"),
-			f.issue(path, 4, "errcheck", "unchecked"),
 			f.issue(path, 5, "errcheck", "unchecked"),
-			f.issue(path, 6, "errcheck", "unchecked"),
 			f.issue(path, 7, "errcheck", "unchecked"),
+			f.issue(path, 9, "errcheck", "unchecked"),
+			f.issue(path, 11, "errcheck", "unchecked"),
 		}
 	}
 
@@ -380,12 +380,12 @@ func TestBaseline_renamedFile(t *testing.T) {
 		f.record(oldIssues(f, "old/a.go"), addMode)
 		f.remove("old/a.go")
 
-		f.write("new/a.go", lines("package a",
-			"func f() {", "\tone()", "\ttwo()", "\tthree()", "\tfour()", "\tfive(1)", "}")...)
+		f.write("new/a.go", lines("package a", "func f() {",
+			"\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "\tskip()", "\tfour()", "\tskip()", "\tfive(1)", "}")...)
 
 		reported, stats := f.run(oldIssues(f, "new/a.go"), "new/a.go")
 
-		assert.Equal(t, []int{7}, reportedLines(reported))
+		assert.Equal(t, []int{11}, reportedLines(reported))
 		assert.Equal(t, 4, stats.Renamed)
 		assert.Equal(t, 1, stats.Stale)
 	})
@@ -397,51 +397,80 @@ func TestBaseline_renamedFile(t *testing.T) {
 		f.record(oldIssues(f, "old/a.go"), addMode)
 		f.remove("old/a.go")
 
-		f.write("new/b.go", lines("package b",
-			"func g() {", "\tone()", "\ttwo()", "\tthree()", "\tother()", "\tmore()", "}")...)
+		f.write("new/b.go", lines("package a", "func f() {",
+			"\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "\tskip()", "\tother()", "\tskip()", "\tmore()", "}")...)
 
 		reported, stats := f.run(oldIssues(f, "new/b.go"), "new/b.go")
 
-		assert.Equal(t, []int{3, 4, 5, 6, 7}, reportedLines(reported))
+		assert.Equal(t, []int{3, 5, 7, 9, 11}, reportedLines(reported))
 		assert.Equal(t, 0, stats.Renamed)
 	})
 
-	t.Run("a new file with one common line is not absorbed", func(t *testing.T) {
+	t.Run("a deleted file with fewer than 3 entries is never taken over", func(t *testing.T) {
 		f := newBaselineFixture(t)
 
-		f.write("old/a.go", lines("package a", "func f() {", "\treturn err", "}")...)
-		f.record([]*result.Issue{f.issue("old/a.go", 3, "errcheck", "unchecked")}, addMode)
-
-		// the old file kept one issue only, so a single match is a full match
+		f.write("old/a.go", lines("package a", "func f() {", "\treturn err", "\tskip()", "\treturn err", "}")...)
+		f.record([]*result.Issue{
+			f.issue("old/a.go", 3, "errcheck", "unchecked"),
+			f.issue("old/a.go", 5, "errcheck", "unchecked"),
+		}, addMode)
 		f.remove("old/a.go")
-		f.write("new/b.go", lines("package b", "func g() {", "\treturn err", "}")...)
 
-		reported, _ := f.run([]*result.Issue{f.issue("new/b.go", 3, "errcheck", "unchecked")}, "new/b.go")
+		f.write("new/a.go", lines("package a", "func f() {", "\treturn err", "\tskip()", "\treturn err", "}")...)
 
-		assert.Empty(t, reported, "all of the old file's entries reappear, so it is a rename")
+		reported, stats := f.run([]*result.Issue{
+			f.issue("new/a.go", 3, "errcheck", "unchecked"),
+			f.issue("new/a.go", 5, "errcheck", "unchecked"),
+		}, "new/a.go")
+
+		assert.Len(t, reported, 2)
+		assert.Equal(t, 0, stats.Renamed)
+	})
+
+	t.Run("a deleted file with 3 entries is taken over by an identical file", func(t *testing.T) {
+		f := newBaselineFixture(t)
+
+		content := lines("package a", "func f() {", "\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "}")
+		issues := func(path string) []*result.Issue {
+			return []*result.Issue{
+				f.issue(path, 3, "errcheck", "unchecked"),
+				f.issue(path, 5, "errcheck", "unchecked"),
+				f.issue(path, 7, "errcheck", "unchecked"),
+			}
+		}
+
+		f.write("old/a.go", content...)
+		f.record(issues("old/a.go"), addMode)
+		f.remove("old/a.go")
+		f.write("new/a.go", content...)
+
+		reported, stats := f.run(issues("new/a.go"), "new/a.go")
+
+		assert.Empty(t, reported)
+		assert.Equal(t, 3, stats.Renamed)
 	})
 
 	t.Run("common lines of a larger deleted file are not absorbed", func(t *testing.T) {
 		f := newBaselineFixture(t)
 
-		f.write("old/a.go", lines("package a",
-			"func f() {", "\treturn err", "\tdefer rows.Close()", "\tx()", "\ty()", "\tz()", "}")...)
+		f.write("old/a.go", lines("package a", "func f() {",
+			"\treturn err", "\tskip()", "\tdefer rows.Close()", "\tskip()", "\tx()", "\tskip()", "\ty()", "\tskip()", "\tz()", "}")...)
 		f.record([]*result.Issue{
 			f.issue("old/a.go", 3, "errcheck", "unchecked"),
-			f.issue("old/a.go", 4, "errcheck", "unchecked"),
 			f.issue("old/a.go", 5, "errcheck", "unchecked"),
-			f.issue("old/a.go", 6, "errcheck", "unchecked"),
 			f.issue("old/a.go", 7, "errcheck", "unchecked"),
+			f.issue("old/a.go", 9, "errcheck", "unchecked"),
+			f.issue("old/a.go", 11, "errcheck", "unchecked"),
 		}, addMode)
 		f.remove("old/a.go")
 
-		f.write("new/b.go", lines("package b",
-			"func g() {", "\treturn err", "\tdefer rows.Close()", "\tbrandNew()", "}")...)
+		f.write("new/b.go", lines("package a", "func f() {",
+			"\treturn err", "\tskip()", "\tdefer rows.Close()", "\tskip()", "\tbrandNew()", "}")...)
 
 		reported, stats := f.run([]*result.Issue{
 			f.issue("new/b.go", 3, "errcheck", "unchecked"),
-			f.issue("new/b.go", 4, "errcheck", "unchecked"),
 			f.issue("new/b.go", 5, "errcheck", "unchecked"),
+			f.issue("new/b.go", 7, "errcheck", "unchecked"),
 		}, "new/b.go")
 
 		assert.Len(t, reported, 3)
@@ -522,23 +551,23 @@ func TestNewBaseline_missingFile(t *testing.T) {
 func TestBaseline_plan(t *testing.T) {
 	f := newBaselineFixture(t)
 
-	f.write("a.go", lines("package a", "func f() {", "\tfixed()", "\tkept()", "}")...)
+	f.write("a.go", lines("package a", "func f() {", "\tfixed()", "\tfiller()", "\tkept()", "}")...)
 	f.write("b.go", lines("package b", "func f() {", "\tuntouched()", "}")...)
 
 	f.record([]*result.Issue{
 		f.issue("a.go", 3, "errcheck", "unchecked"),
-		f.issue("a.go", 4, "errcheck", "unchecked"),
+		f.issue("a.go", 5, "errcheck", "unchecked"),
 		f.issue("b.go", 3, "errcheck", "unchecked"),
 	}, addMode)
 
 	before := f.readBaseline()
 
 	// fixed() is gone, a new linter reports on kept(), b.go was not analyzed
-	f.write("a.go", lines("package a", "func f() {", "\tkept()", "}")...)
+	f.write("a.go", lines("package a", "func f() {", "\tfiller()", "\tkept()", "}")...)
 
 	current := []*result.Issue{
-		f.issue("a.go", 3, "errcheck", "unchecked"),
-		f.issue("a.go", 3, "newlinter", "new finding"),
+		f.issue("a.go", 4, "errcheck", "unchecked"),
+		f.issue("a.go", 4, "newlinter", "new finding"),
 	}
 
 	plan := func(mode BaselineMode) (string, BaselineSummary) {
@@ -577,13 +606,13 @@ func TestBaseline_plan(t *testing.T) {
 	})
 
 	t.Run("an unchanged baseline is written byte for byte", func(t *testing.T) {
-		f.write("a.go", lines("package a", "func f() {", "\tfixed()", "\tkept()", "}")...)
+		f.write("a.go", lines("package a", "func f() {", "\tfixed()", "\tfiller()", "\tkept()", "}")...)
 
 		processor := f.newProcessor(f.options(true, "a.go", "b.go"))
 
 		_, err := processor.Process([]*result.Issue{
 			f.issue("a.go", 3, "errcheck", "unchecked"),
-			f.issue("a.go", 4, "errcheck", "unchecked"),
+			f.issue("a.go", 5, "errcheck", "unchecked"),
 			f.issue("b.go", 3, "errcheck", "unchecked"),
 		})
 		require.NoError(t, err)
@@ -615,26 +644,30 @@ func TestBaseline_planRekeysWithoutRemoving(t *testing.T) {
 func TestBaseline_planMovesRenamedFiles(t *testing.T) {
 	f := newBaselineFixture(t)
 
-	f.write("old/a.go", lines("package a", "func f() {", "\tone()", "\ttwo()", "}")...)
+	content := lines("package a", "func f() {", "\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "}")
+
+	f.write("old/a.go", content...)
 	f.record([]*result.Issue{
 		f.issue("old/a.go", 3, "errcheck", "unchecked"),
-		f.issue("old/a.go", 4, "errcheck", "unchecked"),
+		f.issue("old/a.go", 5, "errcheck", "unchecked"),
+		f.issue("old/a.go", 7, "errcheck", "unchecked"),
 	}, addMode)
 	f.remove("old/a.go")
 
-	f.write("new/a.go", lines("package a", "func f() {", "\tone()", "\ttwo()", "}")...)
+	f.write("new/a.go", content...)
 
 	processor := f.newProcessor(f.options(true, "new/a.go"))
 
 	_, err := processor.Process([]*result.Issue{
 		f.issue("new/a.go", 3, "errcheck", "unchecked"),
-		f.issue("new/a.go", 4, "errcheck", "unchecked"),
+		f.issue("new/a.go", 5, "errcheck", "unchecked"),
+		f.issue("new/a.go", 7, "errcheck", "unchecked"),
 	})
 	require.NoError(t, err)
 
 	data, summary := processor.Plan(BaselineMode{Add: true})
 
-	assert.Equal(t, BaselineSummary{Rekeyed: 2}, summary)
+	assert.Equal(t, BaselineSummary{Rekeyed: 3}, summary)
 	assert.Contains(t, string(data), `["new/a.go"]`)
 	assert.NotContains(t, string(data), `["old/a.go"]`)
 }
@@ -654,4 +687,179 @@ func TestBaseline_planWithSource(t *testing.T) {
 
 	data, _ = processor.Plan(BaselineMode{Add: true})
 	assert.NotContains(t, string(data), "source")
+}
+
+func TestBaseline_onlyLintersThatRanCanBeStale(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	f.write("a.go", lines("package a", "func f() {", "\tone()", "\tskip()", "\ttwo()", "}")...)
+
+	f.record([]*result.Issue{
+		f.issue("a.go", 3, "errcheck", "unchecked"),
+		f.issue("a.go", 3, "godot", "Comment should end in a period"),
+		f.issue("a.go", 5, "godot", "Comment should end in a period"),
+	}, addMode)
+
+	opts := f.options(false, "a.go")
+	opts.Linters = map[string]bool{"godot": true}
+
+	processor := f.newProcessor(opts)
+
+	reported, err := processor.Process([]*result.Issue{
+		f.issue("a.go", 3, "godot", "Comment should end in a period"),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, reported)
+
+	// the entry of errcheck is not stale: it did not run, the second godot entry is: it ran and found nothing
+	assert.Equal(t, BaselineStats{Hidden: 1, Stale: 1}, processor.Stats())
+
+	recordOpts := f.options(true, "a.go")
+	recordOpts.Linters = map[string]bool{"godot": true}
+
+	recorder := f.newProcessor(recordOpts)
+
+	_, err = recorder.Process([]*result.Issue{f.issue("a.go", 3, "godot", "Comment should end in a period")})
+	require.NoError(t, err)
+
+	data, summary := recorder.Plan(BaselineMode{Prune: true})
+
+	assert.Equal(t, BaselineSummary{Pruned: 1, Kept: 2}, summary)
+	assert.Contains(t, string(data), `linter = "errcheck"`)
+}
+
+func TestBaseline_linterThatDidNotRunDoesNotBlockRenames(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	content := lines("package a", "func f() {", "\tone()", "\tskip()", "\ttwo()", "\tskip()", "\tthree()", "}")
+
+	f.write("old/a.go", content...)
+	f.record([]*result.Issue{
+		f.issue("old/a.go", 3, "errcheck", "unchecked"),
+		f.issue("old/a.go", 5, "errcheck", "unchecked"),
+		f.issue("old/a.go", 7, "errcheck", "unchecked"),
+		f.issue("old/a.go", 7, "godot", "period"),
+	}, addMode)
+	f.remove("old/a.go")
+	f.write("new/a.go", content...)
+
+	opts := f.options(false, "new/a.go")
+	opts.Linters = map[string]bool{"errcheck": true}
+
+	processor := f.newProcessor(opts)
+
+	reported, err := processor.Process([]*result.Issue{
+		f.issue("new/a.go", 3, "errcheck", "unchecked"),
+		f.issue("new/a.go", 5, "errcheck", "unchecked"),
+		f.issue("new/a.go", 7, "errcheck", "unchecked"),
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, reported)
+}
+
+func TestBaseline_unchangedLinesUseTheEntriesFirst(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	block := lines("\tx := 1", "\tos.Remove(a)", "\ty := 2")
+
+	f.write("a.go", append(lines("package a", "func f() {"), append(block, "}")...)...)
+	f.record([]*result.Issue{f.issue("a.go", 4, "errcheck", "unchecked")}, addMode)
+
+	// a copy of the block is added above the old one
+	f.write("a.go", append(lines("package a", "func f() {"), append(append(block, block...), "}")...)...)
+
+	current := func() []*result.Issue {
+		return []*result.Issue{
+			f.issue("a.go", 4, "errcheck", "unchecked"),
+			f.issue("a.go", 7, "errcheck", "unchecked"),
+		}
+	}
+
+	t.Run("without a diff the lowest line is hidden", func(t *testing.T) {
+		reported, _ := f.run(current(), "a.go")
+
+		assert.Equal(t, []int{7}, reportedLines(reported))
+	})
+
+	t.Run("with a diff the line that did not change is hidden", func(t *testing.T) {
+		opts := f.options(false, "a.go")
+		opts.IsChanged = func(issue *result.Issue) bool {
+			return issue.Line() == 4
+		}
+
+		processor := f.newProcessor(opts)
+
+		reported, err := processor.Process(current())
+		require.NoError(t, err)
+
+		assert.Equal(t, []int{4}, reportedLines(reported))
+	})
+}
+
+func TestBaseline_sameLineInADifferentPlaceIsNotAbsorbed(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	f.write("a.go", lines("package a", "func f() {", "\tn, err := strconv.Atoi(s)", "\treturn err", "}")...)
+	f.record([]*result.Issue{f.issue("a.go", 4, "wrapcheck", "error returned from external package is unwrapped: Atoi")}, addMode)
+
+	// the old issue is fixed and a new one, with another message, appears on a line of the same text
+	f.write("a.go", lines("package a",
+		"func f() {", "\treturn fmt.Errorf(\"x: %w\", err)", "}",
+		"func g() {", "\tok, err := strconv.ParseBool(s)", "\treturn err", "}")...)
+
+	reported, stats := f.run([]*result.Issue{
+		f.issue("a.go", 7, "wrapcheck", "error returned from external package is unwrapped: ParseBool"),
+	}, "a.go")
+
+	assert.Equal(t, []int{7}, reportedLines(reported))
+	assert.Equal(t, BaselineStats{Stale: 1}, stats)
+}
+
+func TestBaseline_pathsThroughSymbolicLinks(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	linkPath := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(f.dir, linkPath))
+
+	f.write("a.go", lines("package a", "func f() {", "\tx()", "}")...)
+	f.record([]*result.Issue{f.issue("a.go", 3, "errcheck", "unchecked")}, addMode)
+
+	t.Run("the base path is a link, the files are not", func(t *testing.T) {
+		opts := f.options(false, "a.go")
+		opts.BasePath = linkPath
+
+		processor := f.newProcessor(opts)
+
+		reported, err := processor.Process([]*result.Issue{f.issue("a.go", 3, "errcheck", "unchecked")})
+		require.NoError(t, err)
+
+		assert.Empty(t, reported)
+		assert.Equal(t, BaselineStats{Hidden: 1}, processor.Stats())
+	})
+
+	t.Run("the files are reached through a link, the base path is not", func(t *testing.T) {
+		opts := f.options(false)
+		opts.Analyzed = []string{filepath.Join(linkPath, "a.go")}
+
+		processor := f.newProcessor(opts)
+
+		issue := f.issue("a.go", 3, "errcheck", "unchecked")
+		issue.Pos.Filename = filepath.Join(linkPath, "a.go")
+
+		reported, err := processor.Process([]*result.Issue{issue})
+		require.NoError(t, err)
+
+		assert.Empty(t, reported)
+		assert.Equal(t, BaselineStats{Hidden: 1}, processor.Stats())
+	})
+
+	t.Run("a file that cannot be resolved fails open", func(t *testing.T) {
+		processor := f.newProcessor(f.options(false))
+
+		issue := f.issue("a.go", 3, "errcheck", "unchecked")
+		issue.Pos.Filename = filepath.Join(t.TempDir(), "elsewhere", "a.go")
+
+		assert.NotEqual(t, "a.go", processor.relativePath(issue.FilePath()))
+	})
 }

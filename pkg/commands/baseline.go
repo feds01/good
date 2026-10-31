@@ -116,7 +116,7 @@ func (c *runCommand) writeBaseline() error {
 			return fmt.Errorf("can't write the baseline: %w", err)
 		}
 
-		err = os.WriteFile(filePath, data, baselineFilePerm)
+		err = writeFileAtomic(filePath, data)
 		if err != nil {
 			return fmt.Errorf("can't write the baseline: %w", err)
 		}
@@ -130,6 +130,40 @@ func (c *runCommand) writeBaseline() error {
 	c.exitCode = exitcodes.Success
 
 	return nil
+}
+
+// writeFileAtomic writes next to the file and renames, so that a reader never sees a truncated baseline.
+func writeFileAtomic(filePath string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(filePath), ".baseline-*.tmp")
+	if err != nil {
+		return err
+	}
+
+	tempPath := temp.Name()
+
+	_, err = temp.Write(data)
+	if err == nil {
+		err = temp.Sync()
+	}
+
+	closeErr := temp.Close()
+	if err == nil {
+		err = closeErr
+	}
+
+	if err == nil {
+		err = os.Chmod(tempPath, baselineFilePerm)
+	}
+
+	if err == nil {
+		err = os.Rename(tempPath, filePath)
+	}
+
+	if err != nil {
+		_ = os.Remove(tempPath)
+	}
+
+	return err
 }
 
 // reportBaseline prints what the baseline did, on stderr to leave the output formats alone.

@@ -31,6 +31,10 @@ type Diff struct {
 	patchFilePath string
 	wholeFiles    bool
 	patch         string
+
+	checker    *revgrep.Checker
+	isPrepared bool
+	prepareErr error
 }
 
 func NewDiff(cfg *config.Issues) *Diff {
@@ -49,34 +53,13 @@ func (*Diff) Name() string {
 }
 
 func (p *Diff) Process(issues []*result.Issue) ([]*result.Issue, error) {
-	if !p.onlyNew && p.fromRev == "" && p.fromMergeBase == "" && p.patchFilePath == "" && p.patch == "" {
+	if !p.IsActive() {
 		return issues, nil
 	}
 
-	var patchReader io.Reader
-	switch {
-	case p.patchFilePath != "":
-		patch, err := os.ReadFile(p.patchFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("can't read from patch file %s: %w", p.patchFilePath, err)
-		}
-
-		patchReader = bytes.NewReader(patch)
-
-	case p.patch != "":
-		patchReader = strings.NewReader(p.patch)
-	}
-
-	checker := revgrep.Checker{
-		Patch:        patchReader,
-		RevisionFrom: p.fromRev,
-		MergeBase:    p.fromMergeBase,
-		WholeFiles:   p.wholeFiles,
-	}
-
-	err := checker.Prepare(context.Background())
+	err := p.prepare()
 	if err != nil {
-		return nil, fmt.Errorf("can't prepare diff by revgrep: %w", err)
+		return nil, err
 	}
 
 	return transformIssues(issues, func(issue *result.Issue) *result.Issue {
@@ -85,7 +68,7 @@ func (p *Diff) Process(issues []*result.Issue) ([]*result.Issue, error) {
 			return issue
 		}
 
-		hunkPos, isNew := checker.IsNew(issue.WorkingDirectoryRelativePath, issue.Line())
+		hunkPos, isNew := p.checker.IsNew(issue.WorkingDirectoryRelativePath, issue.Line())
 		if !isNew {
 			return nil
 		}
@@ -95,6 +78,62 @@ func (p *Diff) Process(issues []*result.Issue) ([]*result.Issue, error) {
 
 		return &newIssue
 	}), nil
+}
+
+// IsActive tells if the issues are filtered by what changed.
+func (p *Diff) IsActive() bool {
+	return p.onlyNew || p.fromRev != "" || p.fromMergeBase != "" || p.patchFilePath != "" || p.patch != ""
+}
+
+// IsChanged tells if the issue is on a changed line. It reports false when the changes are unknown.
+func (p *Diff) IsChanged(issue *result.Issue) bool {
+	if !p.IsActive() || p.prepare() != nil {
+		return false
+	}
+
+	_, isNew := p.checker.IsNew(issue.WorkingDirectoryRelativePath, issue.Line())
+
+	return isNew
+}
+
+// prepare reads the changes once, so that the diff and the baseline can both use them.
+func (p *Diff) prepare() error {
+	if p.isPrepared {
+		return p.prepareErr
+	}
+
+	p.isPrepared = true
+
+	var patchReader io.Reader
+
+	switch {
+	case p.patchFilePath != "":
+		patch, err := os.ReadFile(p.patchFilePath)
+		if err != nil {
+			p.prepareErr = fmt.Errorf("can't read from patch file %s: %w", p.patchFilePath, err)
+
+			return p.prepareErr
+		}
+
+		patchReader = bytes.NewReader(patch)
+
+	case p.patch != "":
+		patchReader = strings.NewReader(p.patch)
+	}
+
+	p.checker = &revgrep.Checker{
+		Patch:        patchReader,
+		RevisionFrom: p.fromRev,
+		MergeBase:    p.fromMergeBase,
+		WholeFiles:   p.wholeFiles,
+	}
+
+	err := p.checker.Prepare(context.Background())
+	if err != nil {
+		p.prepareErr = fmt.Errorf("can't prepare diff by revgrep: %w", err)
+	}
+
+	return p.prepareErr
 }
 
 func (*Diff) Finish() {}
