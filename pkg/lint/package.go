@@ -21,6 +21,7 @@ import (
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
 	"github.com/golangci/golangci-lint/v2/pkg/exitcodes"
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
 	"github.com/golangci/golangci-lint/v2/pkg/goutil"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
@@ -42,13 +43,17 @@ type PackageLoader struct {
 
 	loadGuard *load.Guard
 
+	fileCache *fsutils.FileCache
+
 	supportMu   sync.Mutex
 	supportFset *token.FileSet
 	supportView map[string]*types.Package
 }
 
 // NewPackageLoader creates a new PackageLoader.
-func NewPackageLoader(log logutils.Log, cfg *config.Config, args []string, env *goutil.Env, loadGuard *load.Guard) *PackageLoader {
+func NewPackageLoader(log logutils.Log, cfg *config.Config, args []string, env *goutil.Env, loadGuard *load.Guard,
+	fileCache *fsutils.FileCache,
+) *PackageLoader {
 	return &PackageLoader{
 		cfg:         cfg,
 		args:        args,
@@ -57,6 +62,7 @@ func NewPackageLoader(log logutils.Log, cfg *config.Config, args []string, env *
 		goenv:       env,
 		pkgTestIDRe: regexp.MustCompile(`^(.*) \[(.*)\.test\]`),
 		loadGuard:   loadGuard,
+		fileCache:   fileCache,
 	}
 }
 
@@ -117,7 +123,7 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 func (l *PackageLoader) completeSkippedData(ctx context.Context, loadMode packages.LoadMode,
 	pkgs []*packages.Package,
 ) ([]*packages.Package, error) {
-	if hasCgoFiles(pkgs) {
+	if hasCgoFiles(pkgs, l.fileCache) {
 		// The analyzed packages need the cgo-processed files.
 		var err error
 
@@ -281,12 +287,17 @@ func (l *PackageLoader) LoadSupportPackage(ctx context.Context, path string) (*t
 }
 
 // hasCgoFiles reports whether one of the packages imports "C".
-func hasCgoFiles(pkgs []*packages.Package) bool {
+func hasCgoFiles(pkgs []*packages.Package, fileCache *fsutils.FileCache) bool {
 	fset := token.NewFileSet()
 
 	for _, pkg := range pkgs {
 		for _, filename := range pkg.GoFiles {
-			file, err := parser.ParseFile(fset, filename, nil, parser.ImportsOnly)
+			src, err := fileCache.GetFileBytes(filename)
+			if err != nil {
+				continue
+			}
+
+			file, err := parser.ParseFile(fset, filename, src, parser.ImportsOnly)
 			if err != nil {
 				continue
 			}

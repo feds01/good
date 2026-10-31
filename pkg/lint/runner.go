@@ -96,7 +96,7 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 			processors.NewCgo(goenv),
 
 			// Must be after Cgo.
-			processors.NewFilenameUnadjuster(lintCtx.Packages, log.Child(logutils.DebugKeyFilenameUnadjuster)),
+			processors.NewFilenameUnadjuster(lintCtx.Packages, fileCache, log.Child(logutils.DebugKeyFilenameUnadjuster)),
 
 			// Must be after FilenameUnadjuster.
 			processors.NewInvalidIssue(log.Child(logutils.DebugKeyInvalidIssue)),
@@ -107,12 +107,15 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 			// Must be after PathRelativity.
 			exclusionPaths,
 
-			processors.NewGeneratedFileFilter(cfg.Linters.Exclusions.Generated),
+			processors.NewGeneratedFileFilter(cfg.Linters.Exclusions.Generated, fileCache),
 
 			processors.NewExclusionRules(log.Child(logutils.DebugKeyExclusionRules), lineCache,
 				&cfg.Linters.Exclusions),
 
-			processors.NewNolintFilter(log.Child(logutils.DebugKeyNolintFilter), dbManager, enabledLinters),
+			// Must be before the baseline, the Fixer and every processor that keeps the first of several issues.
+			processors.NewCanonicalOrder(),
+
+			processors.NewNolintFilter(log.Child(logutils.DebugKeyNolintFilter), fileCache, dbManager, enabledLinters),
 
 			diff,
 

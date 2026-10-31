@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/golinters/nolintlint"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/lintersdb"
@@ -63,6 +64,7 @@ type fileData struct {
 
 // NolintFilter filters and sorts reports related to `nolint` directives.
 type NolintFilter struct {
+	sourceCache    *fsutils.FileCache
 	fileCache      map[string]*fileData
 	dbManager      *lintersdb.Manager
 	enabledLinters map[string]*linter.Config
@@ -73,8 +75,11 @@ type NolintFilter struct {
 	pattern *regexp.Regexp
 }
 
-func NewNolintFilter(log logutils.Log, dbManager *lintersdb.Manager, enabledLinters map[string]*linter.Config) *NolintFilter {
+func NewNolintFilter(log logutils.Log, sourceCache *fsutils.FileCache, dbManager *lintersdb.Manager,
+	enabledLinters map[string]*linter.Config,
+) *NolintFilter {
 	return &NolintFilter{
+		sourceCache:       sourceCache,
 		fileCache:         map[string]*fileData{},
 		dbManager:         dbManager,
 		enabledLinters:    enabledLinters,
@@ -152,8 +157,14 @@ func (p *NolintFilter) getOrCreateFileData(issue *result.Issue) *fileData {
 	// or cache them somehow per file.
 
 	// Don't use cached AST because they consume a lot of memory on large projects.
+	src, err := p.sourceCache.GetFileBytes(issue.FilePath())
+	if err != nil {
+		// Don't report error because it's already must be reporter by typecheck or go/analysis.
+		return fd
+	}
+
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, issue.FilePath(), nil, parser.ParseComments)
+	f, err := parser.ParseFile(fset, issue.FilePath(), src, parser.ParseComments)
 	if err != nil {
 		// Don't report error because it's already must be reporter by typecheck or go/analysis.
 		return fd

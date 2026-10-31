@@ -30,6 +30,13 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   no longer cancels the analysis of the others, so independent type errors in several packages are all reported (before, which
   ones showed depended on scheduling). The packages that import a broken analyzed package do not repeat its error with a
   `could not import` line; one that imports a broken package that is not analyzed itself still reports it.
+- Fewer file opens: a source file is read once per run for the cgo check and the processors, and the hash of each file
+  is kept in the lint cache directory (`filehash-*`) with the size, modification time, change time, inode and device of
+  the file, so a file is read for its cache key only when one of them changed or the file changed within the last 2
+  seconds. The keys are unchanged. Only on macOS and Linux. Shards not written for 14 days and temporary files of a
+  crashed save are deleted. Set `GOLANGCI_LINT_NO_HASH_MEMO=1` to hash every file on every run: do it on NFS, FUSE
+  and exFAT mounts, where stat can be staler than an open or the change time is not kept. Delete the `filehash-*`
+  files, or run `cache clean`, to start over.
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
 - revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of
@@ -38,6 +45,16 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   and `context-keys-type` give the same result in `-trimpath` and regular builds.
   Like the other typed linters, revive does not run on a package that fails to type-check (a `typecheck` issue is
   reported instead), and an import that cannot be resolved is a `typecheck` error.
+- Deterministic output: issues are put in a total order before the processors that keep the first of several issues
+  (`uniq-by-line`, `max-same-issues`, ...), `SortResults` breaks ties on linter, text and severity, and the summary
+  lines no longer follow map order, so identical runs print identical JSON, cold or warm.
+  - canonicalheader no longer reports nothing on a package that uses both `http.Header` and `ResponseWriter.Header()`,
+    which depended on map order (`go.mod` replace of `github.com/golangci/canonicalheader` with `feds01/canonicalheader`).
+  - Of several issues on one line, `uniq-by-line` keeps one from a real linter (first by name), else a formatter, else
+    nolintlint; then the leftmost. A formatter never hides a real issue, because `max-per-file-from-linter` would drop it.
+  - With limits (`max-same-issues`, `max-issues-per-linter`) the issues kept are the first N in file order, where stock
+    kept whatever the linters reported first. The output is a deterministic subset of the unlimited output, but not the
+    same subset as stock, so per-linter counts differ (`max-same-issues` counts texts shared by several linters).
 
 ## Build
 

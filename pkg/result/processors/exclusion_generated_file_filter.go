@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
 	"github.com/golangci/golangci-lint/v2/pkg/result"
 )
@@ -19,18 +20,20 @@ type fileSummary struct {
 type GeneratedFileFilter struct {
 	debugf logutils.DebugFunc
 
-	mode    string
-	matcher *GeneratedFileMatcher
+	mode      string
+	matcher   *GeneratedFileMatcher
+	fileCache *fsutils.FileCache
 
 	fileSummaryCache map[string]*fileSummary
 }
 
-func NewGeneratedFileFilter(mode string) *GeneratedFileFilter {
+func NewGeneratedFileFilter(mode string, fileCache *fsutils.FileCache) *GeneratedFileFilter {
 	return &GeneratedFileFilter{
 		debugf: logutils.Debug(logutils.DebugKeyGeneratedFileFilter),
 
-		mode:    mode,
-		matcher: NewGeneratedFileMatcher(mode),
+		mode:      mode,
+		matcher:   NewGeneratedFileMatcher(mode),
+		fileCache: fileCache,
 
 		fileSummaryCache: map[string]*fileSummary{},
 	}
@@ -64,8 +67,12 @@ func (p *GeneratedFileFilter) shouldPassIssue(issue *result.Issue) (bool, error)
 	fs = &fileSummary{}
 	p.fileSummaryCache[issue.FilePath()] = fs
 
-	var err error
-	fs.generated, err = p.matcher.IsGeneratedFile(issue.FilePath(), nil)
+	src, err := p.fileCache.GetFileBytes(issue.FilePath())
+	if err != nil {
+		return false, fmt.Errorf("failed to get doc (%s) of file %s: %w", p.mode, issue.FilePath(), err)
+	}
+
+	fs.generated, err = p.matcher.IsGeneratedFile(issue.FilePath(), src)
 	if err != nil {
 		return false, fmt.Errorf("failed to get doc (%s) of file %s: %w", p.mode, issue.FilePath(), err)
 	}
