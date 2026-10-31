@@ -22,7 +22,15 @@ const (
 	memoRacyWindow = 2 * time.Second
 
 	// memoMaxAge is how many days an unused entry stays in the memo.
+	// A shard that was not written for as long is deleted.
 	memoMaxAge = 14
+
+	// memoTempMaxAge is how old a temporary file must be to be taken for the leftover of a crashed save,
+	// not the file of a save that is running.
+	memoTempMaxAge = time.Hour
+
+	// memoDisableEnv switches the memo off, so that every file is read.
+	memoDisableEnv = "GOLANGCI_LINT_NO_HASH_MEMO"
 
 	secondsPerDay = 24 * 60 * 60
 )
@@ -150,6 +158,46 @@ func (m *fileHashMemo) save() {
 
 	m.local.save(today)
 	m.shared.save(today)
+
+	m.sweep()
+}
+
+// sweep deletes the shards of working directories that have not been used for long,
+// and the temporary files left by a save that crashed. It is best effort.
+func (m *fileHashMemo) sweep() {
+	dir := filepath.Dir(m.local.path)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	now := m.now()
+
+	for _, entry := range entries {
+		name := entry.Name()
+
+		if entry.IsDir() || !strings.HasPrefix(name, memoFilePrefix) {
+			continue
+		}
+
+		path := filepath.Join(dir, name)
+		if path == m.local.path || path == m.shared.path {
+			continue
+		}
+
+		maxAge := time.Duration(memoMaxAge) * 24 * time.Hour
+		if strings.Contains(name, ".tmp") {
+			maxAge = memoTempMaxAge
+		}
+
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) <= maxAge {
+			continue
+		}
+
+		_ = os.Remove(path)
+	}
 }
 
 func (s *memoShard) load() {

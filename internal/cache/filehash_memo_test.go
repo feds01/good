@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -522,4 +523,238 @@ func TestFileHashMemo_relativePath(t *testing.T) {
 	}
 
 	assert.EqualValues(t, 2, hasher.calls.Load())
+}
+
+func TestFileHashMemo_reapsOldShardsAndTempFiles(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	memoDir := t.TempDir()
+	workDir := t.TempDir()
+	file := writeTestFile(t, workDir, "a.go", "package a\n")
+
+	day := 24 * time.Hour
+	old := time.Now().Add(-time.Duration(memoMaxAge+1) * day)
+	fresh := time.Now().Add(-day)
+
+	files := map[string]struct {
+		modTime time.Time
+		isKept  bool
+	}{
+		memoFilePrefix + "oldshard":         {modTime: old, isKept: false},
+		memoFilePrefix + "freshshard":       {modTime: fresh, isKept: true},
+		memoFilePrefix + "x.tmp123":         {modTime: time.Now().Add(-2 * memoTempMaxAge), isKept: false},
+		memoFilePrefix + "x.tmp456":         {modTime: time.Now(), isKept: true},
+		"0a":                                {modTime: old, isKept: true},
+		"notamemo":                          {modTime: old, isKept: true},
+		memoFilePrefix + "olddirectory.tmp": {modTime: old, isKept: true},
+	}
+
+	for name, test := range files {
+		path := filepath.Join(memoDir, name)
+
+		if name == memoFilePrefix+"olddirectory.tmp" {
+			require.NoError(t, os.Mkdir(path, 0o700))
+		} else {
+			require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+		}
+
+		require.NoError(t, os.Chtimes(path, test.modTime, test.modTime))
+	}
+
+	memo := newFileHashMemo(memoDir, workDir, time.Now)
+
+	_, err := memo.hash(file, (&countingHasher{}).hash)
+	require.NoError(t, err)
+
+	memo.save()
+
+	for name, test := range files {
+		_, err = os.Stat(filepath.Join(memoDir, name))
+
+		if test.isKept {
+			assert.NoError(t, err, name)
+		} else {
+			assert.ErrorIs(t, err, os.ErrNotExist, name)
+		}
+	}
+}
+
+func TestFileHashMemo_sweepKeepsItsOwnShards(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	memoDir := t.TempDir()
+	workDir := t.TempDir()
+	file := writeTestFile(t, workDir, "a.go", "package a\n")
+
+	hasher := &countingHasher{}
+
+	first := newFileHashMemo(memoDir, workDir, settledClock())
+
+	_, err := first.hash(file, hasher.hash)
+	require.NoError(t, err)
+
+	first.save()
+
+	// Shards not written for long, although they are the ones of this working directory.
+	old := time.Now().Add(-time.Duration(memoMaxAge+1) * 24 * time.Hour)
+
+	shards, err := filepath.Glob(filepath.Join(memoDir, memoFilePrefix+"*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, shards)
+
+	for _, shard := range shards {
+		require.NoError(t, os.Chtimes(shard, old, old))
+	}
+
+	second := newFileHashMemo(memoDir, workDir, settledClock())
+
+	_, err = second.hash(file, hasher.hash)
+	require.NoError(t, err)
+
+	second.save()
+
+	third := newFileHashMemo(memoDir, workDir, settledClock())
+
+	_, err = third.hash(file, hasher.hash)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 1, hasher.calls.Load())
+}
+
+func TestDefaultFileHashMemo_disabledByEnv(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
+
+	testCases := []struct {
+		value      string
+		isDisabled bool
+	}{
+		{value: "", isDisabled: false},
+		{value: "0", isDisabled: false},
+		{value: "false", isDisabled: false},
+		{value: "1", isDisabled: true},
+		{value: "true", isDisabled: true},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.value, func(t *testing.T) {
+			t.Setenv(memoDisableEnv, test.value)
+
+			assert.Equal(t, test.isDisabled, defaultFileHashMemo() == nil)
+		})
+	}
+}
+
+func TestCache_Close_noMemoWhenDisabled(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
+	t.Setenv(memoDisableEnv, "1")
+
+	pkgCache := setupCache(t)
+	require.Nil(t, pkgCache.hashMemo)
+
+	file := writeTestFile(t, t.TempDir(), "a.go", "package a\n")
+
+	hasher := &countingHasher{}
+	pkgCache.readFileHash = hasher.hash
+
+	for range 2 {
+		_, err := pkgCache.fileHash(file)
+		require.NoError(t, err)
+	}
+
+	assert.EqualValues(t, 2, hasher.calls.Load(), "every file is read")
+}
+
+// An edit in place that restores the modification time, like `touch -r`,
+// leaves the size and the modification time as they were: the change time is all that tells it apart.
+func TestCache_packageHash_touchReference(t *testing.T) {
+	skipWithoutStatIdentity(t)
+
+	testCases := []struct {
+		desc    string
+		restore func(t *testing.T, file string, modTime time.Time)
+	}{
+		{
+			desc: "exact time",
+			restore: func(t *testing.T, file string, modTime time.Time) {
+				t.Helper()
+
+				require.NoError(t, os.Chtimes(file, modTime, modTime))
+			},
+		},
+		{
+			desc: "whole seconds",
+			restore: func(t *testing.T, file string, modTime time.Time) {
+				t.Helper()
+
+				whole := modTime.Truncate(time.Second)
+				require.NoError(t, os.Chtimes(file, whole, whole))
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			root := writeModule(t, map[string]string{"b": "var x = 1\n"})
+
+			workDir := filepath.Dir(filepath.Dir(root.CompiledGoFiles[0]))
+			memoDir := t.TempDir()
+			file := root.Imports["example.com/m/a"].Imports["example.com/m/b"].CompiledGoFiles[0]
+
+			// A modification time with the sub-second part the file system keeps.
+			old := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(file, old, old))
+
+			info, err := os.Stat(file)
+			require.NoError(t, err)
+
+			modTime := info.ModTime()
+			if test.desc == "whole seconds" {
+				modTime = modTime.Truncate(time.Second)
+				require.NoError(t, os.Chtimes(file, modTime, modTime))
+			}
+
+			hashWithMemo := func() string {
+				pkgCache := setupCache(t)
+				pkgCache.hashMemo = newFileHashMemo(memoDir, workDir, settledClock())
+				pkgCache.readFileHash = (&countingHasher{}).hash
+
+				hash, errHash := pkgCache.packageHash(root, HashModeNeedAllDeps)
+				require.NoError(t, errHash)
+
+				pkgCache.hashMemo.save()
+
+				return hash
+			}
+
+			before := hashWithMemo()
+
+			time.Sleep(50 * time.Millisecond)
+
+			// The same number of bytes, written over the old ones.
+			content, err := os.ReadFile(file)
+			require.NoError(t, err)
+
+			edited := []byte(strings.Replace(string(content), "x = 1", "x = 2", 1))
+			require.Len(t, edited, len(content))
+
+			handle, err := os.OpenFile(file, os.O_WRONLY, 0)
+			require.NoError(t, err)
+
+			_, err = handle.WriteAt(edited, 0)
+			require.NoError(t, err)
+			require.NoError(t, handle.Close())
+
+			test.restore(t, file, modTime)
+
+			after, err := os.Stat(file)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(content)), after.Size())
+
+			assert.NotEqual(t, before, hashWithMemo())
+		})
+	}
 }

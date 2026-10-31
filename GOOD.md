@@ -24,11 +24,13 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   docs in `docs/content/docs/configuration/baseline.md`). `run` matches exactly on file, linter, message and a hash of the
   flagged line with its nearest non-blank neighbors, so edits elsewhere in a file do not bring issues back, and a renamed file keeps its entries.
   The baseline exists only in `good`: using it in CI means running `good` there, stock golangci-lint does not know `issues.baseline`.
-- Fewer file opens: a source file is read once per run for the cgo check and the processors, the gocritic rules read each
-  standard library file once, and the hash of each file is kept in the lint cache directory (`filehash-*`) with the size,
-  modification time, change time, inode and device of the file, so a file is read for its cache key only when one of them
-  changed or the file changed within the last 2 seconds. The keys are unchanged. Only on macOS and Linux; delete the
-  `filehash-*` files, or run `cache clean`, to start over.
+- Fewer file opens: a source file is read once per run for the cgo check and the processors, and the hash of each file
+  is kept in the lint cache directory (`filehash-*`) with the size, modification time, change time, inode and device of
+  the file, so a file is read for its cache key only when one of them changed or the file changed within the last 2
+  seconds. The keys are unchanged. Only on macOS and Linux. Shards not written for 14 days and temporary files of a
+  crashed save are deleted. Set `GOLANGCI_LINT_NO_HASH_MEMO=1` to hash every file on every run: do it on NFS, FUSE
+  and exFAT mounts, where stat can be staler than an open or the change time is not kept. Delete the `filehash-*`
+  files, or run `cache clean`, to start over.
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
 - revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of

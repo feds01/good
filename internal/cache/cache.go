@@ -58,6 +58,10 @@ func NewCache(sw *timeutils.Stopwatch, log logutils.Log) (*Cache, error) {
 }
 
 func defaultFileHashMemo() *fileHashMemo {
+	if isMemoDisabled(os.Getenv(memoDisableEnv)) {
+		return nil
+	}
+
 	dir, _, err := cache.DefaultDir()
 	if err != nil {
 		return nil
@@ -69,6 +73,11 @@ func defaultFileHashMemo() *fileHashMemo {
 	}
 
 	return newFileHashMemo(dir, workDir, time.Now)
+}
+
+// isMemoDisabled tells whether the value of memoDisableEnv asks for no memo.
+func isMemoDisabled(value string) bool {
+	return value != "" && value != "0" && value != "false"
 }
 
 func (c *Cache) Close() {
