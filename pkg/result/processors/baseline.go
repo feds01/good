@@ -156,6 +156,11 @@ func (b *Baseline) Process(issues []*result.Issue) ([]*result.Issue, error) {
 
 func (*Baseline) Finish() {}
 
+// FilePath returns the absolute path of the baseline file.
+func (b *Baseline) FilePath() string {
+	return b.opts.FilePath
+}
+
 // Stats returns the counters of the run. It is complete once the issues have been processed.
 func (b *Baseline) Stats() BaselineStats {
 	b.match(nil)

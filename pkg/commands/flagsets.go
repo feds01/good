@@ -137,6 +137,10 @@ func setupIssuesFlagSet(v *viper.Viper, fs *pflag.FlagSet) {
 		color.GreenString("Show only new issues created after the best common ancestor (merge-base against HEAD)"))
 	internal.AddFlagAndBind(v, fs, fs.Bool, "whole-files", "issues.whole-files", false,
 		color.GreenString("Show issues in any part of update files (requires new-from-rev or new-from-patch)"))
+	internal.AddFlagAndBind(v, fs, fs.String, "baseline", "issues.baseline", "",
+		color.GreenString("Hide the issues recorded in the baseline file `PATH`, relative to the base path (see `good baseline`)"))
+	internal.AddFlagAndBind(v, fs, fs.Bool, "fail-on-stale-baseline", "issues.fail-on-stale-baseline", false,
+		color.GreenString("Fail when the baseline has entries for issues that no longer exist (see `good baseline --prune`)"))
 	internal.AddFlagAndBind(v, fs, fs.Bool, "fix", "issues.fix", false,
 		color.GreenString("Apply the fixes detected by the linters and formatters (if it's supported by the linter)"))
 }

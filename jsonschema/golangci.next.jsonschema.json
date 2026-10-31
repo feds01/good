@@ -5545,6 +5545,17 @@
           "description": "Show issues in any part of update files (requires new-from-rev or new-from-patch).",
           "type": "boolean",
           "default": false
+        },
+        "baseline": {
+          "description": "Path of the baseline file, relative to the base path: the issues it records are not reported. Written by `good baseline`.",
+          "type": "string",
+          "default": "",
+          "examples": [".golangci.baseline.toml"]
+        },
+        "fail-on-stale-baseline": {
+          "description": "Fail when the baseline has entries for issues that no longer exist.",
+          "type": "boolean",
+          "default": false
         }
       }
     },

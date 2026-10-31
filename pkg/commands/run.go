@@ -41,6 +41,7 @@ import (
 	"github.com/golangci/golangci-lint/v2/pkg/printers"
 	"github.com/golangci/golangci-lint/v2/pkg/report"
 	"github.com/golangci/golangci-lint/v2/pkg/result"
+	"github.com/golangci/golangci-lint/v2/pkg/result/processors"
 	"github.com/golangci/golangci-lint/v2/pkg/timeutils"
 )
 
@@ -65,6 +66,8 @@ type runOptions struct {
 	TracePath      string // Flag only.
 
 	PrintResourcesUsage bool // Flag only.
+
+	NoBaseline bool // Flag only.
 }
 
 type runCommand struct {
@@ -93,10 +96,24 @@ type runCommand struct {
 
 	flock *flock.Flock
 
+	baseline *processors.Baseline
+
+	// baselineOpts is set for the `baseline` command only.
+	baselineOpts *baselineOptions
+
 	exitCode int
 }
 
 func newRunCommand(logger logutils.Log, info BuildInfo) *runCommand {
+	c := newLintCommand(logger, info, "run", "Lint the code.")
+
+	c.cmd.Flags().BoolVar(&c.opts.NoBaseline, "no-baseline", false,
+		color.GreenString("Report the issues recorded in the baseline file too"))
+
+	return c
+}
+
+func newLintCommand(logger logutils.Log, info BuildInfo, use, short string) *runCommand {
 	reportData := &report.Data{}
 
 	c := &runCommand{
@@ -109,8 +126,8 @@ func newRunCommand(logger logutils.Log, info BuildInfo) *runCommand {
 	}
 
 	runCmd := &cobra.Command{
-		Use:                "run",
-		Short:              "Lint the code.",
+		Use:                use,
+		Short:              short,
 		Run:                c.execute,
 		PreRunE:            c.preRunE,
 		PostRun:            c.postRun,
@@ -157,6 +174,10 @@ func (c *runCommand) persistentPreRunE(cmd *cobra.Command, args []string) error 
 	err := loader.Load(config.LoadOptions{CheckDeprecation: true, Validation: true})
 	if err != nil {
 		return fmt.Errorf("can't load config: %w", err)
+	}
+
+	if c.opts.NoBaseline {
+		c.cfg.Issues.Baseline = ""
 	}
 
 	// https://go.dev/doc/go1.25#container-aware-gomaxprocs
@@ -345,6 +366,10 @@ func (c *runCommand) runAndPrint(ctx context.Context) error {
 		return err // XXX: don't lose type
 	}
 
+	if c.baselineOpts != nil {
+		return c.writeBaseline()
+	}
+
 	// Fills linters information for the JSON printer.
 	for _, lc := range c.dbManager.GetAllSupportedLinterConfigs() {
 		isEnabled := enabledLintersMap[lc.Name()] != nil
@@ -359,6 +384,8 @@ func (c *runCommand) runAndPrint(ctx context.Context) error {
 	c.printStats(issues)
 
 	c.setExitCodeIfIssuesFound(issues)
+
+	c.reportBaseline()
 
 	c.fileCache.PrintStats(c.log)
 
@@ -382,6 +409,8 @@ func (c *runCommand) runAnalysis(ctx context.Context) ([]*result.Issue, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	c.baseline = runner.Baseline()
 
 	return runner.Run(ctx, lintersToRun)
 }
