@@ -80,7 +80,9 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 		return nil, fmt.Errorf("failed to create meta-formatter: %w", err)
 	}
 
-	baseline, err := newBaseline(log, cfg, lineCache, lintCtx)
+	diff := processors.NewDiff(&cfg.Issues)
+
+	baseline, err := newBaseline(log, cfg, lineCache, lintCtx, enabledLinters, diff)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +114,7 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 
 			processors.NewNolintFilter(log.Child(logutils.DebugKeyNolintFilter), dbManager, enabledLinters),
 
-			processors.NewDiff(&cfg.Issues),
+			diff,
 
 			// The fixer still needs to see paths for the issues that are relative to the current directory.
 			processors.NewFixer(cfg, log, fileCache, metaFormatter),

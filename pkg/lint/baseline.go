@@ -11,26 +11,44 @@ import (
 )
 
 // newBaseline returns nil when the configuration has no baseline.
+// The paths of the baseline are relative to the directory of the configuration file, so that they do not depend on
+// the directory the linter is run from.
 func newBaseline(
 	log logutils.Log, cfg *config.Config, lineCache *fsutils.LineCache, lintCtx *linter.Context,
+	enabledLinters map[string]*linter.Config, diff *processors.Diff,
 ) (*processors.Baseline, error) {
 	if cfg.Issues.Baseline == "" {
 		return nil, nil
 	}
 
-	basePath := cfg.GetBasePath()
+	rootPath := cfg.GetConfigDir()
+	if rootPath == "" {
+		rootPath = cfg.GetBasePath()
+	}
 
 	filePath := cfg.Issues.Baseline
 	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(basePath, filePath)
+		filePath = filepath.Join(rootPath, filePath)
 	}
 
-	return processors.NewBaseline(log.Child(logutils.DebugKeyBaseline), lineCache, processors.BaselineOptions{
+	ranLinters := make(map[string]bool, len(enabledLinters))
+	for name := range enabledLinters {
+		ranLinters[name] = true
+	}
+
+	opts := &processors.BaselineOptions{
 		FilePath: filePath,
-		BasePath: basePath,
+		BasePath: rootPath,
 		Record:   cfg.Issues.BaselineRecord,
-		Analyzed: analyzedFiles(basePath, lintCtx),
-	})
+		Linters:  ranLinters,
+		Analyzed: analyzedFiles(rootPath, lintCtx),
+	}
+
+	if diff.IsActive() && !opts.Record {
+		opts.IsChanged = diff.IsChanged
+	}
+
+	return processors.NewBaseline(log.Child(logutils.DebugKeyBaseline), lineCache, opts)
 }
 
 // analyzedFiles lists the files whose issues the run reported: the Go files of the loaded packages and their go.mod.

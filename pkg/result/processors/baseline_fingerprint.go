@@ -24,15 +24,18 @@ func baselineNormalizeLine(line string) string {
 	return strings.Join(strings.Fields(strings.TrimPrefix(line, byteOrderMark)), " ")
 }
 
-// baselineLineHash fingerprints the source line of an issue.
-// Formatting and line-ending changes keep the fingerprint, an edit of the text changes it.
-func baselineLineHash(line string) string {
-	normalized := baselineNormalizeLine(line)
-	if normalized == "" {
+// baselineContextHash fingerprints a flagged line together with its nearest non-blank neighbors, so that lines that
+// repeat across a file (`return err`) do not share a fingerprint.
+// Formatting and line-ending changes keep it, an edit of the line or of its neighbors changes it.
+func baselineContextHash(above, line, below string) string {
+	flagged := baselineNormalizeLine(line)
+	if flagged == "" {
 		return ""
 	}
 
-	sum := sha256.Sum256([]byte(normalized))
+	text := baselineNormalizeLine(above) + "\n" + flagged + "\n" + baselineNormalizeLine(below)
+
+	sum := sha256.Sum256([]byte(text))
 
 	return hex.EncodeToString(sum[:])[:baselineHashLength]
 }

@@ -10,6 +10,10 @@ import (
 // renameMinShare is the part of a deleted file's entries that must reappear in one new file, as a fraction of 5.
 const renameMinShareNumerator, renameMinShareDenominator = 4, 5
 
+// renameMinEntries is the size under which a deleted file is never taken over: with so few entries a new file that
+// holds one similar line would be taken for a rename.
+const renameMinEntries = 3
+
 type baselineRenameCandidate struct {
 	oldPath    string
 	newPath    string
@@ -117,8 +121,16 @@ func (b *Baseline) renameCandidates(orphans []string, newFiles map[string][]*bas
 		oldKeys := map[string]int{}
 
 		for _, entry := range b.content[oldPath] {
+			if b.opts.Linters != nil && !b.opts.Linters[entry.Linter] {
+				continue
+			}
+
 			total += entry.Count
 			oldKeys[renameKey(entry.baselineKey)] += entry.Count
+		}
+
+		if total < renameMinEntries {
+			continue
 		}
 
 		overlaps := map[string]int{}

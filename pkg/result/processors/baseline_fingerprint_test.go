@@ -6,12 +6,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBaselineLineHash(t *testing.T) {
-	assert.Equal(t, baselineLineHash("defer rows.Close()"), baselineLineHash("\t  defer   rows.Close()\r"))
-	assert.Equal(t, baselineLineHash("x := 1"), baselineLineHash("\xef\xbb\xbfx := 1"))
-	assert.NotEqual(t, baselineLineHash("defer rows.Close()"), baselineLineHash("defer rows.Open()"))
-	assert.Len(t, baselineLineHash("x"), baselineHashLength)
-	assert.Empty(t, baselineLineHash("   \t"))
+func TestBaselineContextHash(t *testing.T) {
+	hash := baselineContextHash("if err != nil {", "return err", "}")
+
+	assert.Equal(t, hash, baselineContextHash("\t if   err != nil {\r", "\t\treturn err\r", "}"))
+	assert.Equal(t, baselineContextHash("a", "x := 1", "b"), baselineContextHash("a", "\xef\xbb\xbfx := 1", "b"))
+	assert.NotEqual(t, hash, baselineContextHash("if err != nil {", "return err", "// done"))
+	assert.NotEqual(t, hash, baselineContextHash("if ok {", "return err", "}"))
+	assert.NotEqual(t, hash, baselineContextHash("if err != nil {", "return nil", "}"))
+	assert.NotEqual(t, baselineContextHash("", "return err", "}"), baselineContextHash("}", "return err", ""))
+	assert.Len(t, hash, baselineHashLength)
+	assert.Empty(t, baselineContextHash("a", "   \t", "b"))
 }
 
 func TestBaselineNormalizeMessage(t *testing.T) {

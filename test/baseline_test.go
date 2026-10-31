@@ -73,9 +73,15 @@ func (p *baselineProject) read(name string) string {
 func (p *baselineProject) command(args ...string) baselineResult {
 	p.t.Helper()
 
+	return p.commandIn(p.dir, args...)
+}
+
+func (p *baselineProject) commandIn(dir string, args ...string) baselineResult {
+	p.t.Helper()
+
 	//nolint:gosec // the binary is the one built for the tests
 	cmd := exec.CommandContext(p.t.Context(), p.binPath, args...)
-	cmd.Dir = p.dir
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOLANGCI_LINT_CACHE="+p.t.TempDir())
 
 	var stdout, stderr bytes.Buffer
@@ -119,6 +125,7 @@ import "os"
 
 func f() {
 	os.Remove("a")
+	println()
 	os.Remove("b")
 }
 `
@@ -144,12 +151,12 @@ func TestBaseline_lifecycle(t *testing.T) {
 	moved := project.run()
 	assert.Equal(t, exitcodes.Success, moved.exitCode, "edits above the flagged lines keep them hidden: "+moved.stdout)
 
-	project.write("main.go", strings.Replace(baselineSource, "\tos.Remove(\"b\")\n", "\tos.Remove(\"b\")\n\tos.Remove(\"c\")\n", 1))
+	project.write("main.go", baselineSource+"\nfunc g() {\n\tos.Remove(\"c\")\n}\n")
 
 	added := project.run()
 	assert.Equal(t, exitcodes.IssuesFound, added.exitCode)
 	assert.Equal(t, 1, countIssues(added.stdout), added.stdout)
-	assert.Contains(t, added.stdout, "main.go:8:")
+	assert.Contains(t, added.stdout, "main.go:12:")
 
 	everything := project.run("--no-baseline")
 	assert.Equal(t, 3, countIssues(everything.stdout), everything.stdout)
@@ -223,11 +230,11 @@ func TestBaseline_fixSkipsBaselinedIssues(t *testing.T) {
 	assert.Equal(t, exitcodes.Success, fixed.exitCode, fixed.stdout)
 	assert.Equal(t, misspelled, project.read("main.go"), "a baselined issue is not fixed")
 
-	project.write("main.go", strings.Replace(misspelled, "func f() {}", "// Another "+typo+" typo.\nfunc g() {}", 1))
+	project.write("main.go", misspelled+"\n// Another "+typo+" typo.\nfunc g() {}\n")
 
 	project.run("--fix")
 	assert.Contains(t, project.read("main.go"), "// Another receive typo.")
-	assert.Contains(t, project.read("main.go"), typo+" typo.\n// Another", "the baselined comment keeps its typo")
+	assert.Contains(t, project.read("main.go"), "a "+typo+" typo.", "the baselined comment keeps its typo")
 }
 
 func TestBaseline_jsonOutputIsUnchanged(t *testing.T) {
@@ -240,4 +247,108 @@ func TestBaseline_jsonOutputIsUnchanged(t *testing.T) {
 	assert.Equal(t, exitcodes.Success, result.exitCode)
 	assert.NotContains(t, result.stdout, "baseline")
 	assert.Contains(t, result.stdout, `"Issues":[]`)
+}
+
+func TestBaseline_onlyLintersThatRanCanBeStale(t *testing.T) {
+	project := newBaselineProject(t, baselineSource)
+
+	require.Equal(t, exitcodes.Success, project.baseline().exitCode)
+
+	partial := project.run("--enable-only=misspell", "--fail-on-stale-baseline")
+	assert.Equal(t, exitcodes.Success, partial.exitCode, partial.stdout+partial.stderr)
+	assert.NotContains(t, partial.stderr, "stale")
+
+	before := project.read("baseline.toml")
+
+	pruned := project.baseline("--prune", "--enable-only=misspell")
+	assert.Contains(t, pruned.stdout, "0 pruned")
+	assert.Equal(t, before, project.read("baseline.toml"), "the entries of the linters that did not run stay")
+}
+
+func TestBaseline_newCodeIsNotHiddenByAnIdenticalOldLine(t *testing.T) {
+	project := newBaselineProject(t, baselineSource)
+
+	require.Equal(t, exitcodes.Success, project.baseline().exitCode)
+
+	// the old issue is fixed, and the same line is added in code that has other neighbors
+	project.write("main.go", `package m
+
+import "os"
+
+func f() {
+	println()
+}
+
+func g() {
+	println("other")
+	os.Remove("a")
+	println("neighbors")
+}
+`)
+
+	result := project.run()
+
+	assert.Equal(t, exitcodes.IssuesFound, result.exitCode)
+	assert.Equal(t, 1, countIssues(result.stdout), result.stdout)
+	assert.Contains(t, result.stdout, "main.go:11:")
+	assert.Contains(t, result.stderr, "stale")
+}
+
+func TestBaseline_newFromRevReportsTheNewCopy(t *testing.T) {
+	const block = "\tx = 1\n\tos.Remove(\"a\")\n\ty = 2\n\t_, _ = x, y\n"
+
+	source := "package m\n\nimport \"os\"\n\nfunc f() {\n\tvar x, y int\n" + block + "}\n"
+
+	project := newBaselineProject(t, source)
+
+	require.Equal(t, exitcodes.Success, project.baseline().exitCode)
+
+	git := func(args ...string) {
+		t.Helper()
+
+		//nolint:gosec // fixed arguments
+		cmd := exec.CommandContext(t.Context(), "git",
+			append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = project.dir
+
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+
+	project.write("main.go", "package m\n\nimport \"os\"\n\nfunc f() {\n\tvar x, y int\n"+block+block+"}\n")
+
+	everything := project.run("--new-from-rev=HEAD")
+	assert.Equal(t, exitcodes.IssuesFound, everything.exitCode, everything.stdout)
+	assert.Equal(t, 1, countIssues(everything.stdout), everything.stdout)
+}
+
+func TestBaseline_worksFromASubdirectoryAndThroughALink(t *testing.T) {
+	project := newBaselineProject(t, baselineSource)
+
+	project.write(".golangci.yml", strings.Replace(baselineConfig, "version: \"2\"\n", "version: \"2\"\nrun:\n  relative-path-mode: wd\n", 1))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(project.dir, "sub"), 0o750))
+	project.write("sub/sub.go", "package sub\n\nimport \"os\"\n\nfunc g() {\n\tos.Remove(\"z\")\n}\n")
+
+	created := project.baseline()
+	require.Equal(t, exitcodes.Success, created.exitCode, created.stderr)
+	assert.Contains(t, project.read("baseline.toml"), `["sub/sub.go"]`)
+
+	fromRoot := project.run()
+	assert.Equal(t, exitcodes.Success, fromRoot.exitCode, fromRoot.stdout+fromRoot.stderr)
+
+	fromSub := project.commandIn(filepath.Join(project.dir, "sub"), "run", "--allow-parallel-runners", "--show-stats=false")
+	assert.Equal(t, exitcodes.Success, fromSub.exitCode, fromSub.stdout+fromSub.stderr)
+	assert.Contains(t, fromSub.stderr, "baseline: 1 issues hidden")
+
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(project.dir, link))
+
+	throughLink := project.commandIn(link, "run", "--allow-parallel-runners", "--show-stats=false")
+	assert.Equal(t, exitcodes.Success, throughLink.exitCode, throughLink.stdout+throughLink.stderr)
+	assert.Contains(t, throughLink.stderr, "baseline: 3 issues hidden")
 }

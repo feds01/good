@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
@@ -16,6 +17,9 @@ import (
 var _ Processor = (*Baseline)(nil)
 
 type baselineOutcome int
+
+// baselineMaxNeighborDistance bounds the search for a non-blank line next to the flagged one.
+const baselineMaxNeighborDistance = 50
 
 const (
 	baselineReported baselineOutcome = iota
@@ -29,8 +33,16 @@ type BaselineOptions struct {
 	// FilePath is the absolute path of the baseline file.
 	FilePath string
 
-	// BasePath is the directory the paths of the baseline file are relative to.
+	// BasePath is the directory the paths of the baseline file are relative to: the one of the configuration file.
 	BasePath string
+
+	// Linters lists the linters that ran. Entries of the other linters are never stale and never pruned.
+	// Nil means that all of them ran.
+	Linters map[string]bool
+
+	// IsChanged tells if an issue is on a changed line, when the issues are also filtered by what changed.
+	// Issues on unchanged lines use the entries first, so that a new copy of a baselined line is the one reported.
+	IsChanged func(issue *result.Issue) bool
 
 	// Record keeps every issue: the processor only observes them, for `good baseline`.
 	// A baseline file that does not exist is then an empty baseline.
@@ -77,6 +89,7 @@ type baselineObserved struct {
 	path     string
 	key      baselineKey
 	source   string
+	isNew    bool
 	outcome  baselineOutcome
 }
 
@@ -94,6 +107,9 @@ type Baseline struct {
 	analyzed map[string]bool
 	exists   map[string]bool
 
+	resolvedBasePath string
+	relativePaths    map[string]string
+
 	typeCheckSeen bool
 	matched       bool
 	observed      []*baselineObserved
@@ -103,7 +119,7 @@ type Baseline struct {
 	sortedByPath map[string][]*baselineEntry
 }
 
-func NewBaseline(log logutils.Log, lineCache *fsutils.LineCache, opts BaselineOptions) (*Baseline, error) {
+func NewBaseline(log logutils.Log, lineCache *fsutils.LineCache, opts *BaselineOptions) (*Baseline, error) {
 	content, err := readBaselineFile(opts.FilePath)
 	if err != nil {
 		if !opts.Record || !errors.Is(err, fs.ErrNotExist) {
@@ -113,21 +129,63 @@ func NewBaseline(log logutils.Log, lineCache *fsutils.LineCache, opts BaselineOp
 		content = baselineContent{}
 	}
 
-	analyzed := map[string]bool{}
-	for _, file := range opts.Analyzed {
-		analyzed[baselineRelativePath(opts.BasePath, file)] = true
+	resolvedBasePath, err := filepath.EvalSymlinks(opts.BasePath)
+	if err != nil {
+		resolvedBasePath = opts.BasePath
 	}
 
-	return &Baseline{
-		log:          log,
-		lineCache:    lineCache,
-		opts:         opts,
-		content:      content,
-		analyzed:     analyzed,
-		exists:       map[string]bool{},
-		moved:        baselineContent{},
-		sortedByPath: map[string][]*baselineEntry{},
-	}, nil
+	b := &Baseline{
+		log:              log,
+		lineCache:        lineCache,
+		opts:             *opts,
+		content:          content,
+		analyzed:         map[string]bool{},
+		exists:           map[string]bool{},
+		resolvedBasePath: resolvedBasePath,
+		relativePaths:    map[string]string{},
+		moved:            baselineContent{},
+		sortedByPath:     map[string][]*baselineEntry{},
+	}
+
+	for _, file := range opts.Analyzed {
+		b.analyzed[b.relativePath(file)] = true
+	}
+
+	return b, nil
+}
+
+// relativePath returns the path of a file relative to the base path, with forward slashes.
+// A file that is reached through a symbolic link is looked up by its real path.
+// A file outside the base path keeps a `..` path, which matches nothing.
+func (b *Baseline) relativePath(file string) string {
+	cached, ok := b.relativePaths[file]
+	if ok {
+		return cached
+	}
+
+	relative, err := filepath.Rel(b.opts.BasePath, file)
+	if err != nil || escapesBase(relative) {
+		resolved, resolveErr := filepath.EvalSymlinks(file)
+		if resolveErr == nil {
+			resolvedRelative, relErr := filepath.Rel(b.resolvedBasePath, resolved)
+			if relErr == nil && !escapesBase(resolvedRelative) {
+				relative, err = resolvedRelative, nil
+			}
+		}
+	}
+
+	if err != nil {
+		relative = file
+	}
+
+	relative = filepath.ToSlash(relative)
+	b.relativePaths[file] = relative
+
+	return relative
+}
+
+func escapesBase(relative string) bool {
+	return relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func (*Baseline) Name() string {
@@ -198,24 +256,30 @@ func (b *Baseline) observe(issues []*result.Issue) {
 			continue
 		}
 
-		path := filepath.ToSlash(issue.RelativePath)
-		source := b.sourceLine(issue)
+		line, hash := b.sourceContext(issue)
 
-		b.observed = append(b.observed, &baselineObserved{
+		observed := &baselineObserved{
 			issue:    issue,
 			position: position,
-			path:     path,
+			path:     b.relativePath(issue.FilePath()),
 			key: baselineKey{
 				Linter:  issue.FromLinter,
-				Hash:    baselineLineHash(source),
-				Message: baselineNormalizeMessage(issue.Text, b.opts.BasePath),
+				Hash:    hash,
+				Message: b.normalizeMessage(issue.Text),
 			},
-			source: baselineNormalizeLine(source),
-		})
+			source: baselineNormalizeLine(line),
+		}
+
+		if b.opts.IsChanged != nil {
+			observed.isNew = b.opts.IsChanged(issue)
+		}
+
+		b.observed = append(b.observed, observed)
 	}
 
 	slices.SortFunc(b.observed, func(a, other *baselineObserved) int {
 		return cmp.Or(
+			compareBools(other.isNew, a.isNew),
 			cmp.Compare(a.path, other.path),
 			cmp.Compare(a.issue.Line(), other.issue.Line()),
 			cmp.Compare(a.issue.Column(), other.issue.Column()),
@@ -226,19 +290,57 @@ func (b *Baseline) observe(issues []*result.Issue) {
 	})
 }
 
-func (b *Baseline) sourceLine(issue *result.Issue) string {
+func (b *Baseline) normalizeMessage(message string) string {
+	message = baselineNormalizeMessage(message, b.opts.BasePath)
+
+	if b.resolvedBasePath != b.opts.BasePath {
+		message = baselineNormalizeMessage(message, b.resolvedBasePath)
+	}
+
+	return message
+}
+
+// sourceContext returns the flagged line and the fingerprint of the line with its nearest non-blank neighbors.
+func (b *Baseline) sourceContext(issue *result.Issue) (line, hash string) {
 	if issue.Line() == 0 {
-		return ""
+		return "", ""
 	}
 
 	line, err := b.lineCache.GetLine(issue.FilePath(), issue.Line())
 	if err != nil {
 		b.log.Infof("Baseline: no source line for %s: %v", issue.FilePath(), err)
 
-		return ""
+		return "", ""
 	}
 
-	return line
+	above := b.neighbor(issue.FilePath(), issue.Line(), -1)
+	below := b.neighbor(issue.FilePath(), issue.Line(), 1)
+
+	return line, baselineContextHash(above, line, below)
+}
+
+// neighbor returns the nearest line in a direction that is not blank, or "" at the edge of the file.
+func (b *Baseline) neighbor(file string, lineNumber, step int) string {
+	for number := lineNumber + step; number >= 1 && abs(number-lineNumber) <= baselineMaxNeighborDistance; number += step {
+		text, err := b.lineCache.GetLine(file, number)
+		if err != nil {
+			return ""
+		}
+
+		if baselineNormalizeLine(text) != "" {
+			return text
+		}
+	}
+
+	return ""
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+
+	return value
 }
 
 // matchExact hides the issues that have an entry with the same file, linter, message and line text.
@@ -316,9 +418,13 @@ func (b *Baseline) fileExists(path string) bool {
 	return exists
 }
 
-// isInScope tells if the run saw the whole file: a file that was not analyzed (partial run, build tags, tests
-// excluded) is never reported as stale and never pruned, a file that is gone is.
-func (b *Baseline) isInScope(path string) bool {
+// isInScope tells if the run saw what the entry describes: a file that was not analyzed (partial run, build tags,
+// tests excluded) and a linter that did not run never make an entry stale or pruned, a file that is gone does.
+func (b *Baseline) isInScope(path string, entry *baselineEntry) bool {
+	if b.opts.Linters != nil && !b.opts.Linters[entry.Linter] {
+		return false
+	}
+
 	return b.analyzed[path] || !b.fileExists(path)
 }
 
@@ -343,12 +449,8 @@ func (b *Baseline) computeStats() {
 	}
 
 	for path := range b.content {
-		if !b.isInScope(path) {
-			continue
-		}
-
 		for _, entry := range b.entriesOf(path) {
-			if entry.remaining() == 0 {
+			if entry.remaining() == 0 || !b.isInScope(path, entry) {
 				continue
 			}
 
@@ -369,12 +471,10 @@ func (b *Baseline) Plan(mode BaselineMode) ([]byte, BaselineSummary) {
 	out := baselineContent{}
 
 	for path, entries := range b.content {
-		inScope := b.isInScope(path)
-
 		for _, entry := range entries {
 			keep := entry.Count - entry.moved
 
-			if inScope && mode.Prune {
+			if mode.Prune && b.isInScope(path, entry) {
 				summary.Pruned += entry.remaining()
 
 				keep = entry.exact
@@ -425,13 +525,4 @@ func sourceIf(isEnabled bool, source string) string {
 	}
 
 	return ""
-}
-
-func baselineRelativePath(basePath, file string) string {
-	relative, err := filepath.Rel(basePath, file)
-	if err != nil {
-		return filepath.ToSlash(file)
-	}
-
-	return filepath.ToSlash(relative)
 }
