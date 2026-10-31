@@ -246,4 +246,4 @@ replace github.com/ashanbrown/forbidigo/v2 => github.com/feds01/forbidigo/v2 v2.
 
 replace github.com/sanposhiho/wastedassign/v2 => github.com/feds01/wastedassign/v2 v2.0.0-20261031142043-28c4860b6c4e
 
-replace github.com/mgechev/revive => github.com/feds01/revive v0.0.0-20261031181141-69b34c7fa329
+replace github.com/mgechev/revive => github.com/feds01/revive v0.0.0-20261031182646-b4c47d86e20f

@@ -61,6 +61,36 @@ func Range(m map[string]int) {
 }
 `
 
+const cgoLinesSource = `// Package cl ...
+package cl
+
+/*
+#include <stdlib.h>
+*/
+import "C"
+
+import "unsafe"
+
+// Free releases a C string and this comment line is deliberately much longer than the limit.
+func Free(s *C.char) {
+	C.free(unsafe.Pointer(s))
+}
+`
+
+const cgoLinesConfig = `version: "2"
+linters:
+  default: none
+  enable: [revive]
+  settings:
+    revive:
+      rules:
+        - name: line-length-limit
+          arguments: [60]
+        - name: file-length-limit
+          arguments:
+            - max: 15
+`
+
 const lineDirectiveSource = `//line gen.tmpl:10
 // Package ln ...
 package ln
@@ -87,6 +117,11 @@ func TestRestoredChecksFire(t *testing.T) {
 	cgoProject := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(cgoProject, "go.mod"), []byte("module example.com/cg\n\ngo 1.21\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(cgoProject, "c.go"), []byte(cgoSource), 0o600))
+
+	cgoLinesProject := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(cgoLinesProject, "go.mod"), []byte("module example.com/cl\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cgoLinesProject, "c.go"), []byte(cgoLinesSource), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cgoLinesProject, ".golangci.yml"), []byte(cgoLinesConfig), 0o600))
 
 	lineProject := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(lineProject, "go.mod"), []byte("module example.com/ln\n\ngo 1.21\n"), 0o600))
@@ -130,6 +165,12 @@ func TestRestoredChecksFire(t *testing.T) {
 			assert.NotContains(t, cgoOutput, "panic")
 			assert.Contains(t, cgoOutput, "c.go:18:9: errorf: should replace errors.New(fmt.Sprintf(...)) with fmt.Errorf(...) (revive)")
 			assert.Contains(t, cgoOutput, "c.go:23:9: range: should omit 2nd value from range; this loop is equivalent to `for k := range ...` (revive)")
+
+			// The rules that read lines see the reported file, not the cgo-generated one.
+			linesOutput := lintProject(cgoLinesProject)
+			assert.Contains(t, linesOutput, "c.go:11: line-length-limit: line is 93 characters, out of limit 60 (revive)")
+			assert.Contains(t, linesOutput, "1 issues:")
+			assert.NotContains(t, linesOutput, "file-length-limit")
 
 			// A //line directive before the package clause must not silence the package.
 			assert.Contains(t, lintProject(lineProject), `l.go:7:5: time-naming: var timeoutSecs is of type time.Duration; don't use unit-specific suffix "Secs" (revive)`)

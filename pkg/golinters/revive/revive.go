@@ -147,7 +147,7 @@ func (w *wrapper) run(pass *analysis.Pass) ([]*goanalysis.Issue, error) {
 	}
 
 	if len(internalErrs) > 0 {
-		return nil, fmt.Errorf("revive: %w", errors.Join(internalErrs...))
+		return nil, errors.Join(internalErrs...)
 	}
 
 	return issues, nil
