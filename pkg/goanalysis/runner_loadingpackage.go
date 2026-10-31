@@ -281,11 +281,6 @@ func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
 	// Call NewPackage directly with explicit name.
 	// This avoids skew between golist and go/types when the files'
 	// package declarations are inconsistent.
-	// Subtle: we populate all Types fields with an empty Package
-	// before loading export data so that export data processing
-	// never has to create a types.Package for an indirect dependency,
-	// which would then require that such created packages be explicitly
-	// inserted back into the Import graph as a final step after export data loading.
 	pkg.Types = types.NewPackage(pkg.PkgPath, pkg.Name)
 
 	pkg.IllTyped = true

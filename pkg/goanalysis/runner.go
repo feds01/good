@@ -293,9 +293,12 @@ func (r *runner) analyze(pkgs []*packages.Package, analyzers []*analysis.Analyze
 
 	unfinishedPkgs = map[*packages.Package]bool{}
 
-	for _, act := range actions {
-		if act.Err != nil || !act.isDone() {
-			unfinishedPkgs[act.Package] = true
+	// act.Package is cleared once a package is released, so the packages come from actionPerPkg.
+	for pkg, pkgActions := range actionPerPkg {
+		for _, act := range pkgActions {
+			if act.Err != nil || !act.isDone() {
+				unfinishedPkgs[pkg] = true
+			}
 		}
 	}
 

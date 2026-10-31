@@ -75,11 +75,11 @@ func (l *PackageLoader) Load(ctx context.Context, linters []*linter.Config) (pkg
 func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
 	l.prepareBuildContext()
 
-	// Export data makes `go list` compile every dependency, and compiled files (also requested by the types sizes)
-	// make it run the C compiler for every cgo dependency.
-	// Both are skipped here: dependencies are type-checked from their original files.
-	isLazyExport := loadMode&packages.NeedExportFile != 0
-	if isLazyExport {
+	// NeedExportFile only marks that the packages are type-checked: export data would make `go list` compile every
+	// dependency, and compiled files (also requested by the types sizes) would make it run the C compiler for every
+	// cgo dependency. Both are skipped, dependencies are type-checked from their original files.
+	isTypedLoad := loadMode&packages.NeedExportFile != 0
+	if isTypedLoad {
 		loadMode &^= packages.NeedExportFile | packages.NeedCompiledGoFiles | packages.NeedTypesSizes
 	}
 
@@ -88,8 +88,8 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 		return nil, err
 	}
 
-	if isLazyExport {
-		pkgs, err = l.completeLazyPackages(ctx, loadMode, pkgs)
+	if isTypedLoad {
+		pkgs, err = l.completeSkippedData(ctx, loadMode, pkgs)
 		if err != nil {
 			return nil, err
 		}
@@ -113,8 +113,8 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 	return l.filterTestMainPackages(pkgs), nil
 }
 
-// completeLazyPackages sets the data that the lazy listing skips: the compiled files and the types sizes.
-func (l *PackageLoader) completeLazyPackages(ctx context.Context, loadMode packages.LoadMode,
+// completeSkippedData sets the data that the listing skips: the compiled files and the types sizes.
+func (l *PackageLoader) completeSkippedData(ctx context.Context, loadMode packages.LoadMode,
 	pkgs []*packages.Package,
 ) ([]*packages.Package, error) {
 	if hasCgoFiles(pkgs) {
