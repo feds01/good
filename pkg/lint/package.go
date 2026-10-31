@@ -45,10 +45,6 @@ type PackageLoader struct {
 	supportMu   sync.Mutex
 	supportFset *token.FileSet
 	supportView map[string]*types.Package
-
-	exportOnce  sync.Once
-	exportFiles map[string]string
-	exportErr   error
 }
 
 // NewPackageLoader creates a new PackageLoader.
@@ -81,8 +77,7 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 
 	// Export data makes `go list` compile every dependency, and compiled files (also requested by the types sizes)
 	// make it run the C compiler for every cgo dependency.
-	// Both are skipped here: the export data is loaded on demand by LoadExportData,
-	// and dependencies are type-checked from their original files.
+	// Both are skipped here: dependencies are type-checked from their original files.
 	isLazyExport := loadMode&packages.NeedExportFile != 0
 	if isLazyExport {
 		loadMode &^= packages.NeedExportFile | packages.NeedCompiledGoFiles | packages.NeedTypesSizes
@@ -195,22 +190,6 @@ func (l *PackageLoader) listPackages(ctx context.Context, loadMode packages.Load
 	return pkgs, nil
 }
 
-// LoadExportData sets pkg.ExportFile.
-// The first call builds the export data of all packages, the next calls reuse it.
-func (l *PackageLoader) LoadExportData(ctx context.Context, pkg *packages.Package) error {
-	l.exportOnce.Do(func() {
-		l.exportFiles, l.exportErr = l.listExportFiles(ctx)
-	})
-
-	if l.exportErr != nil {
-		return l.exportErr
-	}
-
-	pkg.ExportFile = l.exportFiles[pkg.ID]
-
-	return nil
-}
-
 // LoadCompiledGoFiles sets pkg.CompiledGoFiles to the files with cgo processed.
 func (l *PackageLoader) LoadCompiledGoFiles(ctx context.Context, pkg *packages.Package) error {
 	if pkg.ID != pkg.PkgPath {
@@ -299,24 +278,6 @@ func (l *PackageLoader) LoadSupportPackage(ctx context.Context, path string) (*t
 	}
 
 	return gcexportdata.Read(reader, l.supportFset, l.supportView, path)
-}
-
-func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {
-	// Only with cgo processed, go list adds the runtime/cgo import to the cgo packages.
-	loadMode := packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedCompiledGoFiles
-
-	pkgs, err := l.listPackages(ctx, loadMode)
-	if err != nil {
-		return nil, err
-	}
-
-	exportFiles := map[string]string{}
-
-	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-		exportFiles[pkg.ID] = pkg.ExportFile
-	})
-
-	return exportFiles, nil
 }
 
 // hasCgoFiles reports whether one of the packages imports "C".
