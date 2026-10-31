@@ -45,7 +45,7 @@ func TestNewRunner_ordersIssuesBeforeTheProcessorsThatKeepTheFirst(t *testing.T)
 	canonicalOrder := position(processors.NewCanonicalOrder().Name())
 
 	for _, name := range []string{
-		processors.NewNolintFilter(log, dbManager, nil).Name(),
+		processors.NewNolintFilter(log, nil, dbManager, nil).Name(),
 		processors.NewFixer(cfg, log, nil, nil).Name(),
 		processors.NewUniqByLine(true).Name(),
 		processors.NewMaxPerFileFromLinter(cfg).Name(),
