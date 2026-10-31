@@ -26,6 +26,12 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   and `context-keys-type` give the same result in `-trimpath` and regular builds.
   Like the other typed linters, revive does not run on a package that fails to type-check (a `typecheck` issue is
   reported instead), and an import that cannot be resolved is a `typecheck` error.
+- Deterministic output: issues are put in a total order before the processors that keep the first of several issues
+  (`uniq-by-line`, `max-same-issues`, ...), `SortResults` breaks ties on linter, text and severity, and the summary
+  lines no longer follow map order, so identical runs print identical JSON, cold or warm. canonicalheader no longer
+  reports nothing on a package that uses both `http.Header` and `ResponseWriter.Header()` depending on map order
+  (`pkg/golinters/canonicalheader`). Of several issues on one line, `uniq-by-line` keeps the first linter by name, then the
+  leftmost.
 
 ## Build
 
