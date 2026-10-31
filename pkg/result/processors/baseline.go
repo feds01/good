@@ -337,6 +337,11 @@ func (b *Baseline) computeStats() {
 		}
 	}
 
+	if b.typeCheckSeen {
+		// The other linters did not run: nothing can be said about the entries.
+		return
+	}
+
 	for path, entries := range b.content {
 		if !b.isInScope(path) {
 			continue

@@ -253,6 +253,7 @@ func TestBaseline_typeCheckIsNeverHidden(t *testing.T) {
 	f := newBaselineFixture(t)
 
 	f.write("a.go", lines("package a", "x := 1")...)
+	f.record([]*result.Issue{f.issue("a.go", 2, "errcheck", "unchecked")}, addMode)
 
 	typeCheck := f.issue("a.go", 2, "typecheck", "declared and not used")
 
@@ -265,8 +266,9 @@ func TestBaseline_typeCheckIsNeverHidden(t *testing.T) {
 	assert.NotContains(t, string(data), "typecheck")
 	require.NoError(t, os.WriteFile(filepath.Join(f.dir, baselineFileName), data, 0o600))
 
-	reported, _ := f.run([]*result.Issue{typeCheck}, "a.go")
+	reported, stats := f.run([]*result.Issue{typeCheck}, "a.go")
 	assert.Equal(t, []*result.Issue{typeCheck}, reported)
+	assert.Equal(t, BaselineStats{}, stats)
 }
 
 func TestBaseline_rewordedMessages(t *testing.T) {
