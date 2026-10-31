@@ -342,13 +342,19 @@ func (b *Baseline) computeStats() {
 		return
 	}
 
-	for path, entries := range b.content {
+	for path := range b.content {
 		if !b.isInScope(path) {
 			continue
 		}
 
-		for _, entry := range entries {
+		for _, entry := range b.entriesOf(path) {
+			if entry.remaining() == 0 {
+				continue
+			}
+
 			b.stats.Stale += entry.remaining()
+
+			b.log.Infof("Baseline: stale entry in %s: %s: %s", path, entry.Linter, entry.Message)
 		}
 	}
 }
