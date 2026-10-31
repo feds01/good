@@ -24,6 +24,14 @@ type Context struct {
 
 	PkgCache  *cache.Cache
 	LoadGuard *load.Guard
+
+	// DependencyLoader loads dependency data that is not loaded together with the packages.
+	DependencyLoader DependencyLoader
+}
+
+type DependencyLoader interface {
+	// LoadExportData sets pkg.ExportFile.
+	LoadExportData(pkg *packages.Package) error
 }
 
 func (c *Context) Settings() *config.LintersSettings {

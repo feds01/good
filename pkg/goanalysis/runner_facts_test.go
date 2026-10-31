@@ -131,7 +131,7 @@ func newFactsFixture(t *testing.T) *factsFixture {
 		{"other", factsFixtureOther, []string{"left", "q"}},
 	}
 
-	runner := newRunner("test", nil, nil, nil, LoadModeTypesInfo, nil)
+	runner := newRunner("test", nil, nil, nil, nil, LoadModeTypesInfo, nil)
 
 	fixture := &factsFixture{packages: map[string]*types.Package{}, actions: map[string]*action{}}
 	fset := token.NewFileSet()

@@ -103,6 +103,21 @@ func (act *action) persistFactsToCache() error {
 	return act.runner.pkgCache.Put(act.Package, cache.HashModeNeedAllDeps, factCacheKey(analyzer), facts)
 }
 
+// hasCachedFacts reports whether loadActionCachedFacts is expected to succeed, without needing the package's types.
+func (act *action) hasCachedFacts() bool {
+	if act.isInitialPkg || len(act.Analyzer.FactTypes) == 0 {
+		return true
+	}
+
+	has, err := act.runner.pkgCache.Has(act.Package, cache.HashModeNeedAllDeps, factCacheKey(act.Analyzer))
+	if err != nil {
+		act.runner.log.Warnf("Failed to look up cached facts: %s", err)
+		return false
+	}
+
+	return has
+}
+
 func (act *action) loadPersistedFacts() bool {
 	var facts []Fact
 

@@ -20,6 +20,7 @@ import (
 	"github.com/golangci/golangci-lint/v2/internal/cache"
 	"github.com/golangci/golangci-lint/v2/internal/errorutil"
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
+	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
 	"github.com/golangci/golangci-lint/v2/pkg/timeutils"
 )
@@ -50,6 +51,7 @@ type runner struct {
 	prefix         string // ensure unique analyzer names
 	pkgCache       *cache.Cache
 	loadGuard      *load.Guard
+	depLoader      linter.DependencyLoader
 	loadMode       LoadMode
 	passToPkg      map[*analysis.Pass]*packages.Package
 	passToPkgGuard sync.Mutex
@@ -58,13 +60,14 @@ type runner struct {
 }
 
 func newRunner(prefix string, logger logutils.Log, pkgCache *cache.Cache, loadGuard *load.Guard,
-	loadMode LoadMode, sw *timeutils.Stopwatch,
+	depLoader linter.DependencyLoader, loadMode LoadMode, sw *timeutils.Stopwatch,
 ) *runner {
 	return &runner{
 		prefix:     prefix,
 		log:        logger,
 		pkgCache:   pkgCache,
 		loadGuard:  loadGuard,
+		depLoader:  depLoader,
 		loadMode:   loadMode,
 		passToPkg:  map[*analysis.Pass]*packages.Package{},
 		sw:         sw,
@@ -254,6 +257,8 @@ func (r *runner) analyze(pkgs []*packages.Package, analyzers []*analysis.Analyze
 			actions:    actionPerPkg[pkg],
 			loadGuard:  r.loadGuard,
 			dependents: 1, // self dependent
+
+			depLoader: r.depLoader,
 		}
 	}
 	for _, act := range actions {

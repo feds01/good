@@ -21,6 +21,7 @@ import (
 
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
 	"github.com/golangci/golangci-lint/v2/pkg/goutil"
+	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
 )
 
@@ -39,6 +40,9 @@ type loadingPackage struct {
 	dependents  int32 // number of depending on it packages
 	analyzeOnce sync.Once
 	decUseMutex sync.Mutex
+
+	// depLoader loads the data that is not loaded together with the packages, it's nil in tests.
+	depLoader linter.DependencyLoader
 }
 
 func (lp *loadingPackage) analyzeRecursive(ctx context.Context, cancel context.CancelFunc, loadMode LoadMode, loadSem chan struct{}) {
@@ -318,6 +322,15 @@ func (lp *loadingPackage) loadWithFacts(loadMode LoadMode) error {
 func (lp *loadingPackage) loadImportedPackageWithFacts(loadMode LoadMode) error {
 	pkg := lp.pkg
 
+	if loadMode >= LoadModeTypesInfo {
+		// Export data is only worth building when it is used: with missing facts the package is analyzed from source.
+		if !lp.hasAllFactsCached() {
+			return lp.loadFromSourceWithCachedFacts(loadMode)
+		}
+
+		lp.ensureExportData()
+	}
+
 	// Load package from export data
 	if loadMode >= LoadModeTypesInfo {
 		if err := lp.loadFromExportData(); err != nil {
@@ -397,6 +410,50 @@ func (lp *loadingPackage) loadImportedPackageWithFacts(loadMode LoadMode) error 
 		}
 
 		return nil
+	}
+
+	return nil
+}
+
+func (lp *loadingPackage) hasAllFactsCached() bool {
+	for _, act := range lp.actions {
+		if !act.hasCachedFacts() {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (lp *loadingPackage) ensureExportData() {
+	if lp.pkg.ExportFile != "" || lp.depLoader == nil {
+		return
+	}
+
+	err := lp.depLoader.LoadExportData(lp.pkg)
+	if err != nil {
+		lp.log.Warnf("Failed to load export data for %s: %v", lp.pkg, err)
+	}
+}
+
+// loadFromSourceWithCachedFacts type-checks the package from source without reading its export data,
+// then reuses the facts of the actions that are cached.
+func (lp *loadingPackage) loadFromSourceWithCachedFacts(loadMode LoadMode) error {
+	lp.pkg.Types = types.NewPackage(lp.pkg.PkgPath, lp.pkg.Name)
+
+	if err := lp.loadFromSource(loadMode); err != nil {
+		return err
+	}
+
+	for _, act := range lp.actions {
+		if act.loadActionCachedFacts(false) {
+			continue
+		}
+
+		factsCacheDebugf("Loading of facts for %s failed, analyze it from source later", act)
+		act.needAnalyzeSource = true // can't be set in parallel
+
+		act.markDepsForAnalyzingSource()
 	}
 
 	return nil

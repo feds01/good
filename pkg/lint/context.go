@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/tools/go/packages"
+
 	"github.com/golangci/golangci-lint/v2/internal/cache"
 	"github.com/golangci/golangci-lint/v2/pkg/config"
 	"github.com/golangci/golangci-lint/v2/pkg/exitcodes"
@@ -54,7 +56,18 @@ func (cl *ContextBuilder) Build(ctx context.Context, log logutils.Log, linters [
 		Log:       log,
 		PkgCache:  cl.pkgCache,
 		LoadGuard: cl.loadGuard,
+
+		DependencyLoader: &dependencyLoader{ctx: ctx, pkgLoader: cl.pkgLoader},
 	}
 
 	return ret, nil
+}
+
+type dependencyLoader struct {
+	ctx       context.Context
+	pkgLoader *PackageLoader
+}
+
+func (l *dependencyLoader) LoadExportData(pkg *packages.Package) error {
+	return l.pkgLoader.LoadExportData(l.ctx, pkg)
 }

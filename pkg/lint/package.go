@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ldez/grignotin/goenv"
@@ -36,6 +37,10 @@ type PackageLoader struct {
 	goenv *goutil.Env
 
 	loadGuard *load.Guard
+
+	exportOnce  sync.Once
+	exportFiles map[string]string
+	exportErr   error
 }
 
 // NewPackageLoader creates a new PackageLoader.
@@ -64,11 +69,38 @@ func (l *PackageLoader) Load(ctx context.Context, linters []*linter.Config) (pkg
 }
 
 func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
+	l.prepareBuildContext()
+
+	// Export data makes `go list` compile every dependency, so it is loaded on demand by LoadExportData.
+	loadMode &^= packages.NeedExportFile
+
+	pkgs, err := l.listPackages(ctx, loadMode)
+	if err != nil {
+		return nil, err
+	}
+
+	if loadMode&packages.NeedSyntax == 0 {
+		// Needed e.g. for go/analysis loading.
+		fset := token.NewFileSet()
+		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+			pkg.Fset = fset
+			l.loadGuard.AddMutexForPkg(pkg)
+		})
+	}
+
+	l.debugPrintLoadedPackages(pkgs)
+
+	if err := l.parseLoadedPackagesErrors(pkgs); err != nil {
+		return nil, err
+	}
+
+	return l.filterTestMainPackages(pkgs), nil
+}
+
+func (l *PackageLoader) listPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
 	defer func(startedAt time.Time) {
 		l.log.Infof("Go packages loading at mode %s took %s", stringifyLoadMode(loadMode), time.Since(startedAt))
 	}(time.Now())
-
-	l.prepareBuildContext()
 
 	conf := &packages.Config{
 		Mode:       loadMode,
@@ -88,22 +120,41 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 		return nil, fmt.Errorf("failed to load with go/packages: %w", err)
 	}
 
-	if loadMode&packages.NeedSyntax == 0 {
-		// Needed e.g. for go/analysis loading.
-		fset := token.NewFileSet()
-		packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-			pkg.Fset = fset
-			l.loadGuard.AddMutexForPkg(pkg)
-		})
+	return pkgs, nil
+}
+
+// LoadExportData sets pkg.ExportFile.
+// The first call builds the export data of all packages, the next calls reuse it.
+func (l *PackageLoader) LoadExportData(ctx context.Context, pkg *packages.Package) error {
+	l.exportOnce.Do(func() {
+		l.exportFiles, l.exportErr = l.listExportFiles(ctx)
+	})
+
+	if l.exportErr != nil {
+		return l.exportErr
 	}
 
-	l.debugPrintLoadedPackages(pkgs)
+	pkg.ExportFile = l.exportFiles[pkg.ID]
 
-	if err := l.parseLoadedPackagesErrors(pkgs); err != nil {
+	return nil
+}
+
+func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {
+	// Only with cgo processed, go list adds the runtime/cgo import to the cgo packages.
+	loadMode := packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedCompiledGoFiles
+
+	pkgs, err := l.listPackages(ctx, loadMode)
+	if err != nil {
 		return nil, err
 	}
 
-	return l.filterTestMainPackages(pkgs), nil
+	exportFiles := map[string]string{}
+
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		exportFiles[pkg.ID] = pkg.ExportFile
+	})
+
+	return exportFiles, nil
 }
 
 func (*PackageLoader) parseLoadedPackagesErrors(pkgs []*packages.Package) error {
