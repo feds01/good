@@ -606,7 +606,7 @@ func (LinterBuilder) Build(cfg *config.Config) ([]*linter.Config, error) {
 
 		linter.NewConfig(revive.New(&cfg.Linters.Settings.Revive)).
 			WithSince("v1.37.0").
-			ConsiderSlow().
+			WithLoadForGoAnalysis().
 			WithAutoFix().
 			WithURL("https://github.com/revive-lint/revive"),
 

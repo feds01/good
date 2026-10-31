@@ -11,6 +11,12 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   reported as all-new code (`go.mod` replace of `github.com/golangci/revgrep` with `feds01/revgrep`).
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
+- revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of
+  `github.com/mgechev/revive` with `feds01/revive`, branch `use-pass-types`). revive no longer type-checks
+  each package a second time, so `time-naming`, `var-declaration`, the `errorf` check on `t.Error(fmt.Sprintf(...))`
+  and `context-keys-type` give the same result in `-trimpath` and regular builds.
+  Like the other typed linters, revive does not run on a package that fails to type-check (a `typecheck` issue is
+  reported instead), and an import that cannot be resolved is a `typecheck` error.
 
 ## Build
 

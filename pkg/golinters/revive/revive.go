@@ -20,7 +20,6 @@ import (
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis"
-	"github.com/golangci/golangci-lint/v2/pkg/golinters/internal"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
 	"github.com/golangci/golangci-lint/v2/pkg/result"
@@ -72,7 +71,7 @@ func New(settings *config.ReviveSettings) *goanalysis.Linter {
 		WithIssuesReporter(func(*linter.Context) []*goanalysis.Issue {
 			return resIssues
 		}).
-		WithLoadMode(goanalysis.LoadModeSyntax)
+		WithLoadMode(goanalysis.LoadModeTypesInfo)
 }
 
 type wrapper struct {
@@ -107,9 +106,22 @@ func newWrapper(settings *config.ReviveSettings) (*wrapper, error) {
 }
 
 func (w *wrapper) run(pass *analysis.Pass) ([]*goanalysis.Issue, error) {
-	packages := [][]string{internal.GetGoFileNames(pass)}
+	pkg := lint.TypedPackage{
+		Fset:  pass.Fset,
+		Types: pass.Pkg,
+		Info:  pass.TypesInfo,
+	}
 
-	failures, err := w.revive.Lint(packages, w.lintingRules, *w.conf)
+	for _, file := range pass.Files {
+		_, isGoFile := goanalysis.GetGoFilePosition(pass, file)
+		if !isGoFile {
+			continue
+		}
+
+		pkg.Files = append(pkg.Files, file)
+	}
+
+	failures, err := w.revive.LintTyped([]lint.TypedPackage{pkg}, w.lintingRules, *w.conf)
 	if err != nil {
 		return nil, err
 	}
@@ -149,14 +161,14 @@ func (w *wrapper) toIssue(pass *analysis.Pass, failure *lint.Failure) *goanalysi
 	}
 
 	if failure.ReplacementLine != "" {
-		f := pass.Fset.File(token.Pos(failure.Position.Start.Offset))
+		f := tokenFileByName(pass, failure.Filename())
 
 		// Skip cgo files because the positions are wrong.
-		if failure.Filename() == f.Name() {
+		if f != nil {
 			issue.SuggestedFixes = []analysis.SuggestedFix{{
 				TextEdits: []analysis.TextEdit{{
-					Pos: f.LineStart(failure.Position.Start.Line),
-					End: goanalysis.EndOfLinePos(f, failure.Position.End.Line),
+					Pos: token.Pos(f.Offset(f.LineStart(failure.Position.Start.Line))),
+					End: token.Pos(f.Offset(goanalysis.EndOfLinePos(f, failure.Position.End.Line)) + 1),
 					// ReplacementLine doesn't contain the full line (missing newline), so we have to add a newline.
 					// Also `failure.Position.End.Offset` is at the end of the node but not the line.
 					NewText: []byte(failure.ReplacementLine + "\n"),
@@ -166,6 +178,17 @@ func (w *wrapper) toIssue(pass *analysis.Pass, failure *lint.Failure) *goanalysi
 	}
 
 	return goanalysis.NewIssue(issue, pass)
+}
+
+func tokenFileByName(pass *analysis.Pass, name string) *token.File {
+	for _, file := range pass.Files {
+		tokenFile := pass.Fset.File(file.Pos())
+		if tokenFile.Name() == name {
+			return tokenFile
+		}
+	}
+
+	return nil
 }
 
 // This function mimics the GetConfig function of revive.
