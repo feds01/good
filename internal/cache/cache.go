@@ -127,28 +127,35 @@ func (c *Cache) pkgActionID(pkg *packages.Package, mode HashMode) (cache.ActionI
 	return key.Sum(), nil
 }
 
+// pkgHashEntry holds the hashes of a package, computed once per run.
+type pkgHashEntry struct {
+	once    sync.Once
+	results hashResults
+	err     error
+}
+
 func (c *Cache) packageHash(pkg *packages.Package, mode HashMode) (string, error) {
-	results, found := c.pkgHashes.Load(pkg)
-	if found {
-		hashRes := results.(hashResults)
-		if result, ok := hashRes[mode]; ok {
-			return result, nil
-		}
-
-		return "", fmt.Errorf("no mode %d in hash result", mode)
+	value, found := c.pkgHashes.Load(pkg)
+	if !found {
+		value, _ = c.pkgHashes.LoadOrStore(pkg, &pkgHashEntry{})
 	}
 
-	hashRes, err := c.computePkgHash(pkg)
-	if err != nil {
-		return "", err
+	entry := value.(*pkgHashEntry)
+
+	// Concurrent callers share one computation: many packages import the same dependencies.
+	// Imports form a DAG, so recursing through once.Do cannot deadlock.
+	entry.once.Do(func() {
+		entry.results, entry.err = c.computePkgHash(pkg)
+	})
+
+	if entry.err != nil {
+		return "", entry.err
 	}
 
-	result, found := hashRes[mode]
+	result, found := entry.results[mode]
 	if !found {
 		return "", fmt.Errorf("invalid mode %d", mode)
 	}
-
-	c.pkgHashes.Store(pkg, hashRes)
 
 	return result, nil
 }
