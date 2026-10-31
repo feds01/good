@@ -1,4 +1,5 @@
 //golangcitest:args -Erevive
+//golangcitest:expected_exitcode 0
 // Package testdata ...
 package testdata
 
