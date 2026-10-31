@@ -352,3 +352,27 @@ func TestBaseline_worksFromASubdirectoryAndThroughALink(t *testing.T) {
 	assert.Equal(t, exitcodes.Success, throughLink.exitCode, throughLink.stdout+throughLink.stderr)
 	assert.Contains(t, throughLink.stderr, "baseline: 3 issues hidden")
 }
+
+func TestBaseline_rewordedIssuesAreReportedUntilTheBaselineIsUpdated(t *testing.T) {
+	project := newBaselineProject(t, baselineSource)
+
+	require.Equal(t, exitcodes.Success, project.baseline().exitCode)
+
+	// a linter upgrade rewords the message
+	reworded := strings.ReplaceAll(project.read("baseline.toml"), "Error return value of", "Unchecked error from")
+	require.NotEqual(t, project.read("baseline.toml"), reworded)
+	project.write("baseline.toml", reworded)
+
+	reported := project.run()
+	assert.Equal(t, exitcodes.IssuesFound, reported.exitCode)
+	assert.Equal(t, 2, countIssues(reported.stdout), reported.stdout)
+
+	rekeyed := project.baseline()
+	assert.Equal(t, exitcodes.Success, rekeyed.exitCode, rekeyed.stderr)
+	assert.Contains(t, rekeyed.stdout, "baseline: 0 added, 0 pruned, 0 kept, 2 re-keyed")
+	assert.Contains(t, project.read("baseline.toml"), "Error return value of")
+
+	clean := project.run()
+	assert.Equal(t, exitcodes.Success, clean.exitCode, clean.stdout)
+	assert.Empty(t, clean.stdout)
+}

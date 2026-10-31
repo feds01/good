@@ -282,31 +282,47 @@ func TestBaseline_rewordedMessages(t *testing.T) {
 
 	f.record([]*result.Issue{revive("should not use basic type string as key in context.WithValue", 2)}, addMode)
 
-	t.Run("reworded message is hidden and counted", func(t *testing.T) {
-		reported, stats := f.run([]*result.Issue{revive("should not use basic type untyped string as key in context.WithValue", 2)}, "a.go")
+	reworded := func() []*result.Issue {
+		return []*result.Issue{revive("should not use basic type untyped string as key in context.WithValue", 2)}
+	}
+
+	t.Run("run reports a reworded issue", func(t *testing.T) {
+		reported, stats := f.run(reworded(), "a.go")
+
+		assert.Equal(t, []int{2}, reportedLines(reported))
+		assert.Equal(t, BaselineStats{Stale: 1}, stats)
+	})
+
+	t.Run("baseline rewrites the entry in place, then run reports nothing", func(t *testing.T) {
+		summary := f.record(reworded(), addMode)
+
+		assert.Equal(t, BaselineSummary{Rekeyed: 1}, summary)
+		assert.Contains(t, f.readBaseline(), "untyped string")
+		assert.NotContains(t, f.readBaseline(), "basic type string as key")
+
+		reported, stats := f.run(reworded(), "a.go")
 
 		assert.Empty(t, reported)
-		assert.Equal(t, BaselineStats{Hidden: 1, Drifted: 1}, stats)
+		assert.Equal(t, BaselineStats{Hidden: 1}, stats)
 	})
+}
 
-	t.Run("a second issue on the line is not hidden", func(t *testing.T) {
-		reported, stats := f.run([]*result.Issue{
-			revive("should not use basic type string as key in context.WithValue", 2),
-			revive("another message", 2),
-		}, "a.go")
+func TestBaseline_secondIssueOnTheLineIsReported(t *testing.T) {
+	f := newBaselineFixture(t)
 
-		assert.Len(t, reported, 1)
-		assert.Equal(t, "another message", reported[0].Text)
-		assert.Equal(t, 0, stats.Drifted)
-	})
+	f.write("a.go", lines("package a", "const key = \"k\"", "func f() { use(key) }")...)
+	f.record([]*result.Issue{f.issue("a.go", 2, "revive", "message")}, addMode)
 
-	t.Run("another linter is not hidden", func(t *testing.T) {
-		other := f.issue("a.go", 2, "gocritic", "reworded")
+	reported, _ := f.run([]*result.Issue{
+		f.issue("a.go", 2, "revive", "message"),
+		f.issue("a.go", 2, "revive", "another message"),
+	}, "a.go")
 
-		reported, _ := f.run([]*result.Issue{other}, "a.go")
+	require.Len(t, reported, 1)
+	assert.Equal(t, "another message", reported[0].Text)
 
-		assert.Len(t, reported, 1)
-	})
+	other, _ := f.run([]*result.Issue{f.issue("a.go", 2, "gocritic", "message")}, "a.go")
+	assert.Len(t, other, 1, "another linter is not hidden")
 }
 
 func TestBaseline_positionsInMessagesDoNotMatter(t *testing.T) {
@@ -797,23 +813,43 @@ func TestBaseline_unchangedLinesUseTheEntriesFirst(t *testing.T) {
 	})
 }
 
-func TestBaseline_sameLineInADifferentPlaceIsNotAbsorbed(t *testing.T) {
+func TestBaseline_idiomaticErrorReturnIsNotAbsorbed(t *testing.T) {
 	f := newBaselineFixture(t)
 
-	f.write("a.go", lines("package a", "func f() {", "\tn, err := strconv.Atoi(s)", "\treturn err", "}")...)
-	f.record([]*result.Issue{f.issue("a.go", 4, "wrapcheck", "error returned from external package is unwrapped: Atoi")}, addMode)
-
-	// the old issue is fixed and a new one, with another message, appears on a line of the same text
+	// both functions have the same three-line window around the flagged `return err`
 	f.write("a.go", lines("package a",
-		"func f() {", "\treturn fmt.Errorf(\"x: %w\", err)", "}",
-		"func g() {", "\tok, err := strconv.ParseBool(s)", "\treturn err", "}")...)
+		"func f() error {", "\t_, err := strconv.Atoi(s)", "\tif err != nil {", "\t\treturn err", "\t}", "\treturn nil", "}")...)
+	f.record([]*result.Issue{f.issue("a.go", 5, "wrapcheck", "error returned from external package is unwrapped: Atoi")}, addMode)
+
+	// the old issue is fixed, and a new one with another message appears in a second function
+	f.write("a.go", lines("package a",
+		"func f() error {", "\t_, err := strconv.Atoi(s)", "\tif err != nil {", "\t\treturn fmt.Errorf(\"x: %w\", err)", "\t}", "\treturn nil", "}",
+		"func g() error {", "\t_, err := strconv.ParseBool(s)", "\tif err != nil {", "\t\treturn err", "\t}", "\treturn nil", "}")...)
 
 	reported, stats := f.run([]*result.Issue{
-		f.issue("a.go", 7, "wrapcheck", "error returned from external package is unwrapped: ParseBool"),
+		f.issue("a.go", 12, "wrapcheck", "error returned from external package is unwrapped: ParseBool"),
 	}, "a.go")
 
-	assert.Equal(t, []int{7}, reportedLines(reported))
+	assert.Equal(t, []int{12}, reportedLines(reported))
 	assert.Equal(t, BaselineStats{Stale: 1}, stats)
+}
+
+func TestBaseline_identicalMessageAndWindowStaysHidden(t *testing.T) {
+	f := newBaselineFixture(t)
+
+	window := lines("\tif err != nil {", "\t\treturn err", "\t}")
+
+	f.write("a.go", append(lines("package a", "func f() error {"), append(window, "\treturn nil", "}")...)...)
+	f.record([]*result.Issue{f.issue("a.go", 4, "wrapcheck", "unwrapped: Atoi")}, addMode)
+
+	// fixed in f, the same message and window appear in g: nothing tells them apart
+	f.write("a.go", lines("package a", "func f() error {", "\treturn nil", "}",
+		"func g() error {", "\tif err != nil {", "\t\treturn err", "\t}", "\treturn nil", "}")...)
+
+	reported, stats := f.run([]*result.Issue{f.issue("a.go", 7, "wrapcheck", "unwrapped: Atoi")}, "a.go")
+
+	assert.Empty(t, reported)
+	assert.Equal(t, 0, stats.Stale)
 }
 
 func TestBaseline_pathsThroughSymbolicLinks(t *testing.T) {

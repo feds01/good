@@ -361,9 +361,14 @@ func (b *Baseline) matchExact() {
 	}
 }
 
-// matchDrifted hides the issues whose message changed, for instance after a linter upgrade, using the entries of the
-// same file and linter and the same line text that the exact pass left over.
+// matchDrifted pairs the issues whose message changed, for instance after a linter upgrade, with the entries of the
+// same file and linter and the same line window that the exact pass left over, so that `good baseline` rewrites the
+// entry in place. It never hides an issue: a run that matches loosely would also hide a new issue on a repeated line.
 func (b *Baseline) matchDrifted() {
+	if !b.opts.Record {
+		return
+	}
+
 	for _, observed := range b.observed {
 		if observed.outcome != baselineReported || observed.key.Hash == "" {
 			continue

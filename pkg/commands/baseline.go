@@ -181,8 +181,8 @@ func (c *runCommand) reportBaseline() {
 		c.cmd.PrintErrf(", %d stale entries (run `%s baseline --prune`)", stats.Stale, binary)
 	}
 
-	if stats.Drifted+stats.Renamed > 0 {
-		c.cmd.PrintErrf(", %d reworded or renamed (run `%s baseline` to update)", stats.Drifted+stats.Renamed, binary)
+	if stats.Renamed > 0 {
+		c.cmd.PrintErrf(", %d in renamed files (run `%s baseline` to update)", stats.Renamed, binary)
 	}
 
 	c.cmd.PrintErrln()

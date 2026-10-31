@@ -30,7 +30,7 @@ Commit the file.
 
 | Command                              | Effect                                                                                           |
 |--------------------------------------|--------------------------------------------------------------------------------------------------|
-| `golangci-lint baseline`             | Adds the issues that are not recorded yet. Nothing is removed. Use it after an upgrade, after enabling a linter or changing its settings. |
+| `golangci-lint baseline`             | Adds the issues that are not recorded yet. Nothing is removed. It also rewrites the entries whose message was reworded. Use it after an upgrade, after enabling a linter or changing its settings. |
 | `golangci-lint baseline --prune`     | Removes the entries of issues that no longer exist. Nothing is added.                            |
 | `golangci-lint baseline --add --prune` | Both: the file matches the code.                                                               |
 | `--dry-run`                          | Prints what would change, writes nothing.                                                        |
@@ -70,15 +70,22 @@ The new file lists every issue the code has now, so review its diff.
 
 ## Matching
 
-- Edits elsewhere in a file never bring its issues back. Editing the flagged line, or the line directly above or below it, does,
-  and so does adding a new identical finding with the same neighbors.
+`run` matches exactly: the file, the linter, the message and the hash must all be the same.
+
+- Edits elsewhere in a file never bring its issues back.
+  Editing the flagged line or the line directly above or below it does, and so does an edit at the start or the end of a file
+  that has the flagged line as its first or last line (the missing neighbor is part of the hash).
+  Adding a new identical finding with the same neighbors does too, except in the case below.
 - With `--new-from-*`, the issues on unchanged lines use the entries first, so the one that is reported is the new copy.
-- An issue whose message was reworded (a linter upgrade) still matches by file, linter and the line with its neighbors.
-  `baseline` rewrites the entry with the new message.
+- An issue whose message was reworded (a linter upgrade) is reported by `run`.
+  `baseline` pairs it with the entry of the same file, linter and line window and rewrites that entry in place,
+  so the file is updated, not extended with a new entry and a stale one.
 - A file that was renamed or moved keeps its entries when it had at least 3 and at least 80% of them reappear in one new file.
   Otherwise its issues are reported again, and `baseline` records them under the new path.
 - Entries of files that were not analyzed in a run (a partial run, build tags, `run.tests: false`) are neither stale nor pruned.
 - `typecheck` errors are never hidden.
 - Issues that `//nolint` or an exclusion removes are not in the baseline: their entries become stale.
 - `--fix` does not fix baselined issues.
-- Fixing one finding and adding an identical one with the same neighbors in the same file stays hidden: nothing tells them apart.
+- A file in format version 1 is rejected: record it again with `baseline`.
+- Residual: fixing one finding and adding another with the same message and the same three-line window
+  (flagged line plus the nearest lines around it) in the same file stays hidden. Nothing in the file tells them apart.

@@ -189,7 +189,7 @@ func (b *Baseline) adoptRenamed(oldPath string, observedIssues []*baselineObserv
 			continue
 		}
 
-		if observed.key.Hash == "" {
+		if observed.key.Hash == "" || !b.opts.Record {
 			continue
 		}
 
