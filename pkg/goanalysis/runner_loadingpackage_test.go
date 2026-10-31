@@ -40,19 +40,9 @@ var cacheNoFactAnalyzer = &analysis.Analyzer{
 }
 
 type fakeDependencyLoader struct {
-	exportFile    string
 	processedFile string
 
-	exportDataCalls int
-	cgoFilesCalls   int
-}
-
-func (l *fakeDependencyLoader) LoadExportData(pkg *packages.Package) error {
-	l.exportDataCalls++
-
-	pkg.ExportFile = l.exportFile
-
-	return nil
+	cgoFilesCalls int
 }
 
 func (l *fakeDependencyLoader) LoadCompiledGoFiles(pkg *packages.Package) error {
@@ -75,28 +65,6 @@ func writeGoFile(t *testing.T, name, content string) string {
 	require.NoError(t, os.WriteFile(filename, []byte(content), 0o600))
 
 	return filename
-}
-
-// writeExportData builds the export data of a package, like the loader does for dependencies.
-func writeExportData(t *testing.T, filename string) string {
-	t.Helper()
-
-	dir := filepath.Dir(filename)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/dep\n\ngo 1.21\n"), 0o600))
-
-	conf := &packages.Config{
-		Mode: packages.NeedName | packages.NeedExportFile,
-		Dir:  dir,
-		Env:  append(os.Environ(), "GOFLAGS=-mod=mod"),
-	}
-
-	pkgs, err := packages.Load(conf, ".")
-	require.NoError(t, err)
-	require.Len(t, pkgs, 1)
-	require.Empty(t, pkgs[0].Errors)
-
-	return pkgs[0].ExportFile
 }
 
 func newDependency(filename string) *packages.Package {
@@ -145,89 +113,62 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 	pkgCache, err := cache.NewCache(timeutils.NewStopwatch("pkgcache", log), log)
 	require.NoError(t, err)
 
-	t.Run("loads from source without export data when facts are not cached", func(t *testing.T) {
+	t.Run("analyzes from source when facts are not cached", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc Uncached() {}\n")
 
 		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheFactAnalyzer)
+		lp := newDependencyLoadingPackage(pkg, pkgCache, &fakeDependencyLoader{}, cacheFactAnalyzer)
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Zero(t, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("Uncached"))
 		assert.True(t, lp.actions[0].needAnalyzeSource)
 	})
 
-	t.Run("loads export data when facts are cached", func(t *testing.T) {
+	t.Run("type-checks from source and reuses the facts when they are cached", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc Cached() {}\n")
 
 		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{exportFile: writeExportData(t, filename)}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheFactAnalyzer)
+		lp := newDependencyLoadingPackage(pkg, pkgCache, &fakeDependencyLoader{}, cacheFactAnalyzer)
 
 		require.NoError(t, pkgCache.Put(pkg, cache.HashModeNeedAllDeps, factCacheKey(cacheFactAnalyzer), []Fact{}))
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Equal(t, 1, depLoader.exportDataCalls)
-		assert.Equal(t, depLoader.exportFile, pkg.ExportFile)
+		assert.Empty(t, pkg.ExportFile)
 		assert.Empty(t, pkg.Errors)
-		assert.Empty(t, pkg.Syntax)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("Cached"))
-		assert.False(t, lp.actions[0].needAnalyzeSource)
+		assert.False(t, lp.actions[0].needAnalyzeSource, "cached facts are reused")
 	})
 
-	t.Run("loads from source when no analyzer has facts", func(t *testing.T) {
+	t.Run("type-checks from source when no analyzer has facts", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoFacts() {}\n")
 
 		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{exportFile: writeExportData(t, filename)}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheNoFactAnalyzer)
+		lp := newDependencyLoadingPackage(pkg, pkgCache, &fakeDependencyLoader{}, cacheNoFactAnalyzer)
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Zero(t, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("NoFacts"))
 		assert.False(t, lp.actions[0].needAnalyzeSource)
 	})
 
-	t.Run("loads from source when there are no actions", func(t *testing.T) {
+	t.Run("type-checks from source when there are no actions", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoActions() {}\n")
 
 		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{exportFile: writeExportData(t, filename)}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader)
+		lp := newDependencyLoadingPackage(pkg, pkgCache, &fakeDependencyLoader{})
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Zero(t, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("NoActions"))
 	})
 
-	t.Run("loads from source when the export data is missing", func(t *testing.T) {
-		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoExport() {}\n")
-
-		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheFactAnalyzer)
-
-		require.NoError(t, pkgCache.Put(pkg, cache.HashModeNeedAllDeps, factCacheKey(cacheFactAnalyzer), []Fact{}))
-
-		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
-
-		assert.Equal(t, 1, depLoader.exportDataCalls)
-		assert.Empty(t, pkg.Errors)
-		assert.NotNil(t, pkg.Types.Scope().Lookup("NoExport"))
-		assert.True(t, lp.actions[0].needAnalyzeSource, "facts are recomputed")
-	})
-
-	t.Run("loads source when only some facts are cached", func(t *testing.T) {
+	t.Run("analyzes only the actions whose facts are not cached", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc Partial() {}\n")
 
 		pkg := newDependency(filename)
-		depLoader := &fakeDependencyLoader{}
-		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheFactAnalyzer, cacheNoFactAnalyzer)
+		lp := newDependencyLoadingPackage(pkg, pkgCache, &fakeDependencyLoader{}, cacheFactAnalyzer, cacheNoFactAnalyzer)
 
 		require.NoError(t, pkgCache.Put(pkg, cache.HashModeNeedAllDeps, factCacheKey(cacheFactAnalyzer), []Fact{}))
 
@@ -242,7 +183,6 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Zero(t, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("Partial"))
 		assert.False(t, lp.actions[0].needAnalyzeSource, "cached facts are reused")
 		assert.True(t, lp.actions[2].needAnalyzeSource)
