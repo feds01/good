@@ -2,6 +2,7 @@ package processors
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -73,7 +74,9 @@ func (p *ExclusionRules) Process(issues []*result.Issue) ([]*result.Issue, error
 }
 
 func (p *ExclusionRules) Finish() {
-	for rule, count := range p.skippedCounter {
+	for _, rule := range slices.Sorted(maps.Keys(p.skippedCounter)) {
+		count := p.skippedCounter[rule]
+
 		if p.warnUnused && count == 0 {
 			p.log.Warnf("Skipped %d issues by rules: [%s]", count, rule)
 		} else {
