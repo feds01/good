@@ -18,6 +18,12 @@ The module path is unchanged (`github.com/golangci/golangci-lint/v2`) so each pa
   A package that has no export data (it does not compile) is analyzed from source, so the output does not depend on the
   state of the lint cache. Errors that only the compiler reports, such as `missing function body`, are no longer
   reported for analyzed packages; type errors still are. `go build` and the tests catch the others.
+- Baseline: `issues.baseline` points to a committed file of known issues that `run` does not report, so old code
+  does not have to be fixed after an upgrade or when a linter is enabled. `good baseline` adds the new findings,
+  `good baseline --prune` removes the fixed ones (branch `baseline`, `pkg/result/processors/baseline*.go`,
+  docs in `docs/content/docs/configuration/baseline.md`). Entries match by file, linter, message and the text of the
+  flagged line, so edits elsewhere in a file do not bring issues back, and a renamed file keeps its entries.
+  The baseline exists only in `good`: using it in CI means running `good` there, stock golangci-lint does not know `issues.baseline`.
 - forbidigo: no `go/printer` for identifiers and selectors (`go.mod` replace of
   `github.com/ashanbrown/forbidigo/v2` with `feds01/forbidigo`).
 - revive: the rules reuse the type information golangci-lint already computed (`go.mod` replace of
