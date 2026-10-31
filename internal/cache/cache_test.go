@@ -63,6 +63,10 @@ func TestCache_Put(t *testing.T) {
 	err := pkgCache.Put(pkg, HashModeNeedAllDeps, "key", in)
 	require.NoError(t, err)
 
+	has, err := pkgCache.Has(pkg, HashModeNeedAllDeps, "key")
+	require.NoError(t, err)
+	assert.True(t, has)
+
 	out := &Foo{}
 	err = pkgCache.Get(pkg, HashModeNeedAllDeps, "key", out)
 	require.NoError(t, err)
@@ -84,6 +88,10 @@ func TestCache_Get_missing_data(t *testing.T) {
 	require.Error(t, err)
 
 	require.ErrorIs(t, err, ErrMissing)
+
+	has, err := pkgCache.Has(pkg, HashModeNeedAllDeps, "key")
+	require.NoError(t, err)
+	assert.False(t, has)
 
 	pkgCache.Close()
 }

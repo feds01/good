@@ -94,6 +94,30 @@ func (c *Cache) Get(pkg *packages.Package, mode HashMode, key string, data any) 
 	return c.decode(cachedData, data)
 }
 
+// Has reports whether data is cached for the package and key, without reading it.
+func (c *Cache) Has(pkg *packages.Package, mode HashMode, key string) (bool, error) {
+	actionID, err := c.buildKey(pkg, mode, key)
+	if err != nil {
+		return false, fmt.Errorf("failed to calculate package %s action id: %w", pkg.Name, err)
+	}
+
+	c.ioSem <- struct{}{}
+
+	_, err = c.lowLevelCache.Get(actionID)
+
+	<-c.ioSem
+
+	if err != nil {
+		if cache.IsErrMissing(err) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("failed to look up key %s for package %s in low-level cache: %w", key, pkg.Name, err)
+	}
+
+	return true, nil
+}
+
 func (c *Cache) buildKey(pkg *packages.Package, mode HashMode, key string) (cache.ActionID, error) {
 	return timeutils.TrackStage(c.sw, "key build", func() (cache.ActionID, error) {
 		actionID, err := c.pkgActionID(pkg, mode)
