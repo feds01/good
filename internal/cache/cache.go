@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/tools/go/packages"
 
@@ -40,6 +42,8 @@ type Cache struct {
 	sw            *timeutils.Stopwatch
 	log           logutils.Log
 	ioSem         chan struct{} // semaphore limiting parallel IO
+	hashMemo      *fileHashMemo // nil when file hashes are not kept between runs
+	readFileHash  func(file string) (fileHash, error)
 }
 
 func NewCache(sw *timeutils.Stopwatch, log logutils.Log) (*Cache, error) {
@@ -48,10 +52,28 @@ func NewCache(sw *timeutils.Stopwatch, log logutils.Log) (*Cache, error) {
 		sw:            sw,
 		log:           log,
 		ioSem:         make(chan struct{}, runtime.GOMAXPROCS(-1)),
+		hashMemo:      defaultFileHashMemo(),
+		readFileHash:  cache.FileHash,
 	}, nil
 }
 
+func defaultFileHashMemo() *fileHashMemo {
+	dir, _, err := cache.DefaultDir()
+	if err != nil {
+		return nil
+	}
+
+	workDir, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+
+	return newFileHashMemo(dir, workDir, time.Now)
+}
+
 func (c *Cache) Close() {
+	c.hashMemo.save()
+
 	err := c.sw.TrackStageErr("close", c.lowLevelCache.Close)
 	if err != nil {
 		c.log.Errorf("cache close: %v", err)
@@ -287,7 +309,7 @@ func (c *Cache) getBytes(actionID cache.ActionID) ([]byte, error) {
 func (c *Cache) fileHash(f string) ([cache.HashSize]byte, error) {
 	c.ioSem <- struct{}{}
 
-	h, err := cache.FileHash(f)
+	h, err := c.hashMemo.hash(f, c.readFileHash)
 
 	<-c.ioSem
 
