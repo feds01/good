@@ -178,7 +178,7 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 		assert.False(t, lp.actions[0].needAnalyzeSource)
 	})
 
-	t.Run("loads export data when there are no facts", func(t *testing.T) {
+	t.Run("loads from source when no analyzer has facts", func(t *testing.T) {
 		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoFacts() {}\n")
 
 		pkg := newDependency(filename)
@@ -187,8 +187,22 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 
 		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
 
-		assert.Equal(t, 1, depLoader.exportDataCalls)
+		assert.Zero(t, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("NoFacts"))
+		assert.False(t, lp.actions[0].needAnalyzeSource)
+	})
+
+	t.Run("loads from source when there are no actions", func(t *testing.T) {
+		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoActions() {}\n")
+
+		pkg := newDependency(filename)
+		depLoader := &fakeDependencyLoader{exportFile: writeExportData(t, filename)}
+		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader)
+
+		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
+
+		assert.Zero(t, depLoader.exportDataCalls)
+		assert.NotNil(t, pkg.Types.Scope().Lookup("NoActions"))
 	})
 
 	t.Run("loads from source when the export data is missing", func(t *testing.T) {

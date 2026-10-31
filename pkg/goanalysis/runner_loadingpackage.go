@@ -526,14 +526,22 @@ func (lp *loadingPackage) loadImportedPackageWithFacts(loadMode LoadMode) error 
 	return nil
 }
 
+// hasAllFactsCached reports whether the package has facts and all of them are cached:
+// export data is only worth building to read cached facts.
 func (lp *loadingPackage) hasAllFactsCached() bool {
+	hasFacts := false
+
 	for _, act := range lp.actions {
+		if len(act.Analyzer.FactTypes) > 0 {
+			hasFacts = true
+		}
+
 		if !act.hasCachedFacts() {
 			return false
 		}
 	}
 
-	return true
+	return hasFacts
 }
 
 func (lp *loadingPackage) ensureExportData() {
