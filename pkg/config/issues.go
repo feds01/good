@@ -12,4 +12,10 @@ type Issues struct {
 	Diff              bool   `mapstructure:"new"`
 
 	NeedFix bool `mapstructure:"fix"`
+
+	Baseline            string `mapstructure:"baseline"`
+	FailOnStaleBaseline bool   `mapstructure:"fail-on-stale-baseline"`
+
+	// BaselineRecord makes the baseline observe the issues instead of hiding them, for `good baseline`.
+	BaselineRecord bool `mapstructure:"-"`
 }

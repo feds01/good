@@ -4899,6 +4899,15 @@ issues:
   # Default: false
   whole-files: true
 
+  # Path of the baseline file, relative to the base path: the issues it records are not reported.
+  # Written by `good baseline`.
+  # Default: ""
+  baseline: .golangci.baseline.toml
+
+  # Fail when the baseline has entries for issues that no longer exist.
+  # Default: false
+  fail-on-stale-baseline: true
+
   # Apply the fixes detected by the linters and formatters (if it's supported by the linter).
   # Default: false
   fix: true

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/golangci/golangci-lint/v2/internal/errorutil"
@@ -31,6 +32,7 @@ type Runner struct {
 
 	lintCtx    *linter.Context
 	Processors []processors.Processor
+	baseline   *processors.Baseline
 }
 
 func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
@@ -78,7 +80,13 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 		return nil, fmt.Errorf("failed to create meta-formatter: %w", err)
 	}
 
-	return &Runner{
+	baseline, err := newBaseline(log, cfg, lineCache, lintCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	runner := &Runner{
+		baseline: baseline,
 		Processors: []processors.Processor{
 			// Must be the first processor.
 			processors.NewPathAbsoluter(log),
@@ -124,7 +132,30 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 		},
 		lintCtx: lintCtx,
 		Log:     log,
-	}, nil
+	}
+
+	if baseline != nil {
+		runner.insertBaseline(baseline)
+	}
+
+	return runner, nil
+}
+
+// insertBaseline puts the baseline right after the nolint filter: it must see every issue that is left after the
+// exclusions, and run before the diff, the fixer and the limits.
+func (r *Runner) insertBaseline(baseline *processors.Baseline) {
+	nolintIndex := slices.IndexFunc(r.Processors, func(processor processors.Processor) bool {
+		_, ok := processor.(*processors.NolintFilter)
+
+		return ok
+	})
+
+	r.Processors = slices.Insert(r.Processors, nolintIndex+1, processors.Processor(baseline))
+}
+
+// Baseline returns the baseline processor, nil when no baseline is configured.
+func (r *Runner) Baseline() *processors.Baseline {
+	return r.baseline
 }
 
 func (r *Runner) Run(ctx context.Context, linters []*linter.Config) ([]*result.Issue, error) {

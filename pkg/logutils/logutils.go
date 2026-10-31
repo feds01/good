@@ -44,6 +44,7 @@ const (
 
 // Processors.
 const (
+	DebugKeyBaseline            = "baseline"
 	DebugKeyExclusionPaths      = "exclusion_paths"
 	DebugKeyExclusionRules      = "exclusion_rules"
 	DebugKeyFilenameUnadjuster  = "filename_unadjuster"
