@@ -5547,7 +5547,7 @@
           "default": false
         },
         "baseline": {
-          "description": "Path of the baseline file, relative to the base path: the issues it records are not reported. Written by `good baseline`.",
+          "description": "Path of the baseline file, relative to the directory of the configuration file: the issues it records are not reported. Written by `good baseline`.",
           "type": "string",
           "default": "",
           "examples": [".golangci.baseline.toml"]
