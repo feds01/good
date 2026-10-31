@@ -226,7 +226,7 @@ func (c *runCommand) preRunE(_ *cobra.Command, args []string) error {
 
 	guard := load.NewGuard()
 
-	pkgLoader := lint.NewPackageLoader(c.log.Child(logutils.DebugKeyLoader), c.cfg, args, c.goenv, guard)
+	pkgLoader := lint.NewPackageLoader(c.log.Child(logutils.DebugKeyLoader), c.cfg, args, c.goenv, guard, c.fileCache)
 
 	c.contextBuilder = lint.NewContextBuilder(c.cfg, pkgLoader, pkgCache, guard)
 

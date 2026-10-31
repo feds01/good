@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/golinters/nolintlint"
 	"github.com/golangci/golangci-lint/v2/pkg/lint/lintersdb"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
@@ -35,7 +36,7 @@ func newNolint2FileIssue(line int) *result.Issue {
 func newTestNolintFilter(log logutils.Log) *NolintFilter {
 	dbManager, _ := lintersdb.NewManager(log, config.NewDefault(), lintersdb.NewLinterBuilder())
 
-	return NewNolintFilter(log, dbManager, nil)
+	return NewNolintFilter(log, fsutils.NewFileCache(), dbManager, nil)
 }
 
 func getMockLog() *logutils.MockLog {
@@ -280,7 +281,7 @@ func TestNolintFilter_Process_unused(t *testing.T) {
 		enabledLintersMap, err := dbManager.GetEnabledLintersMap()
 		require.NoError(t, err)
 
-		return NewNolintFilter(log, dbManager, enabledLintersMap)
+		return NewNolintFilter(log, fsutils.NewFileCache(), dbManager, enabledLintersMap)
 	}
 
 	// the issue below is the nolintlint issue that would be generated for the test file
@@ -344,7 +345,7 @@ func TestNolintFilter_Process_unused(t *testing.T) {
 		enabledLintersMap, err := dbManager.GetEnabledLintersMap()
 		require.NoError(t, err)
 
-		p := NewNolintFilter(log, dbManager, enabledLintersMap)
+		p := NewNolintFilter(log, fsutils.NewFileCache(), dbManager, enabledLintersMap)
 		defer p.Finish()
 
 		processAssertEmpty(t, p, nolintlintIssueMisspell)

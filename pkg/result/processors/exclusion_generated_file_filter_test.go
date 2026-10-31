@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/result"
 )
 
@@ -49,7 +50,7 @@ func TestGeneratedFileFilter_shouldPassIssue(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			p := NewGeneratedFileFilter(test.mode)
+			p := NewGeneratedFileFilter(test.mode, fsutils.NewFileCache())
 
 			pass, err := p.shouldPassIssue(test.issue)
 			require.NoError(t, err)
@@ -80,7 +81,7 @@ func TestGeneratedFileFilter_shouldPassIssue_error(t *testing.T) {
 					Filename: filepath.FromSlash("no-existing.go"),
 				},
 			},
-			expected: fmt.Sprintf("failed to get doc (lax) of file %[1]s: failed to parse file: open %[1]s: %[2]s",
+			expected: fmt.Sprintf("failed to get doc (lax) of file %[1]s: can't read file %[1]s: open %[1]s: %[2]s",
 				filepath.FromSlash("no-existing.go"), notFoundMsg),
 		},
 		{
@@ -92,7 +93,7 @@ func TestGeneratedFileFilter_shouldPassIssue_error(t *testing.T) {
 					Filename: filepath.FromSlash("no-existing.go"),
 				},
 			},
-			expected: fmt.Sprintf("failed to get doc (strict) of file %[1]s: failed to parse file: open %[1]s: %[2]s",
+			expected: fmt.Sprintf("failed to get doc (strict) of file %[1]s: can't read file %[1]s: open %[1]s: %[2]s",
 				filepath.FromSlash("no-existing.go"), notFoundMsg),
 		},
 	}
@@ -101,7 +102,7 @@ func TestGeneratedFileFilter_shouldPassIssue_error(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			p := NewGeneratedFileFilter(test.mode)
+			p := NewGeneratedFileFilter(test.mode, fsutils.NewFileCache())
 
 			pass, err := p.shouldPassIssue(test.issue)
 

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
+	"github.com/golangci/golangci-lint/v2/pkg/fsutils"
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
 	"github.com/golangci/golangci-lint/v2/pkg/goutil"
 	"github.com/golangci/golangci-lint/v2/pkg/logutils"
@@ -108,7 +109,7 @@ func Test_hasCgoFiles(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, test.expected, hasCgoFiles(test.pkgs))
+			assert.Equal(t, test.expected, hasCgoFiles(test.pkgs, fsutils.NewFileCache()))
 		})
 	}
 }
@@ -130,7 +131,7 @@ func TestPackageLoader_loadPackages_lazy(t *testing.T) {
 	t.Chdir(dir)
 
 	log := logutils.NewStderrLog("skip")
-	loader := NewPackageLoader(log, config.NewDefault(), []string{"./..."}, goutil.NewEnv(log), load.NewGuard())
+	loader := NewPackageLoader(log, config.NewDefault(), []string{"./..."}, goutil.NewEnv(log), load.NewGuard(), fsutils.NewFileCache())
 
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports |
 		packages.NeedDeps | packages.NeedExportFile | packages.NeedTypesSizes
