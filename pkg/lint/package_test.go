@@ -141,14 +141,11 @@ func TestPackageLoader_loadPackages_lazy(t *testing.T) {
 
 	pkg := pkgs[0]
 
-	assert.Empty(t, pkg.ExportFile, "export data is loaded on demand")
+	assert.Empty(t, pkg.ExportFile, "export data is not built")
 	assert.NotNil(t, pkg.TypesSizes)
 	assert.Equal(t, pkg.GoFiles, pkg.CompiledGoFiles)
 	assert.NotNil(t, pkg.Imports["fmt"])
 	assert.Empty(t, pkg.Imports["fmt"].ExportFile)
-
-	require.NoError(t, loader.LoadExportData(t.Context(), pkg.Imports["fmt"]))
-	assert.NotEmpty(t, pkg.Imports["fmt"].ExportFile)
 }
 
 func Test_cgoFlagsEnv(t *testing.T) {

@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/tools/go/gcexportdata"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/golangci/golangci-lint/v2/pkg/goanalysis/load"
@@ -354,63 +353,6 @@ func (lp *loadingPackage) loadFromSource(loadMode LoadMode) error {
 	return nil
 }
 
-func (lp *loadingPackage) loadFromExportData() error {
-	pkg := lp.pkg
-
-	// Call NewPackage directly with explicit name.
-	// This avoids skew between golist and go/types when the files'
-	// package declarations are inconsistent.
-	// Subtle: we populate all Types fields with an empty Package
-	// before loading export data so that export data processing
-	// never has to create a types.Package for an indirect dependency,
-	// which would then require that such created packages be explicitly
-	// inserted back into the Import graph as a final step after export data loading.
-	pkg.Types = types.NewPackage(pkg.PkgPath, pkg.Name)
-
-	pkg.IllTyped = true
-	for path, pkg := range pkg.Imports {
-		if pkg.Types == nil {
-			return fmt.Errorf("dependency %q hasn't been loaded yet", path)
-		}
-	}
-
-	if pkg.ExportFile == "" {
-		return fmt.Errorf("no export data for %q", pkg.ID)
-	}
-
-	f, err := os.Open(pkg.ExportFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	r, err := gcexportdata.NewReader(f)
-	if err != nil {
-		return err
-	}
-
-	view := make(map[string]*types.Package)  // view seen by gcexportdata
-	seen := make(map[*packages.Package]bool) // all visited packages
-	var visit func(pkgs map[string]*packages.Package)
-	visit = func(pkgs map[string]*packages.Package) {
-		for _, pkg := range pkgs {
-			if !seen[pkg] {
-				seen[pkg] = true
-				view[pkg.PkgPath] = pkg.Types
-				visit(pkg.Imports)
-			}
-		}
-	}
-	visit(pkg.Imports)
-	tpkg, err := gcexportdata.Read(r, pkg.Fset, view, pkg.PkgPath)
-	if err != nil {
-		return err
-	}
-	pkg.Types = tpkg
-	pkg.IllTyped = false
-	return nil
-}
-
 func (lp *loadingPackage) loadWithFacts(loadMode LoadMode) error {
 	pkg := lp.pkg
 
@@ -449,29 +391,13 @@ func (lp *loadingPackage) loadWithFacts(loadMode LoadMode) error {
 }
 
 func (lp *loadingPackage) loadImportedPackageWithFacts(loadMode LoadMode) error {
-	pkg := lp.pkg
-
 	if loadMode >= LoadModeTypesInfo {
-		// Export data is only worth building when it is used: with missing facts the package is analyzed from source.
-		if !lp.hasAllFactsCached() {
-			return lp.loadFromSourceWithCachedFacts(loadMode)
-		}
-
-		lp.ensureExportData()
-	}
-
-	// Load package from export data
-	if loadMode >= LoadModeTypesInfo {
-		if err := lp.loadFromExportData(); err != nil {
-			// The package has no export data, e.g. because it doesn't compile: analyze it from source,
-			// like a package whose facts aren't cached, so the result doesn't depend on the state of the cache.
-			factsCacheDebugf("Loading of export data for %s failed (%v), analyze it from source", lp.pkg, err)
-
-			return lp.loadFromSourceWithoutCachedFacts(loadMode)
-		}
+		// Reading export data would make `go list` compile the whole dependency graph.
+		return lp.loadFromSourceWithCachedFacts(loadMode)
 	}
 
 	needLoadFromSource := false
+
 	for _, act := range lp.actions {
 		if act.loadActionCachedFacts(false) {
 			continue
@@ -486,90 +412,13 @@ func (lp *loadingPackage) loadImportedPackageWithFacts(loadMode LoadMode) error 
 	}
 
 	if needLoadFromSource {
-		// Cached facts loading failed: analyze later the action from source. To perform
-		// the analysis we need to load the package from source code.
-
-		// Otherwise, it panics because uses already existing (from exported data) types.
-		if loadMode >= LoadModeTypesInfo {
-			pkg.Types = types.NewPackage(pkg.PkgPath, pkg.Name)
-		}
-
-		if err := lp.loadFromSource(loadMode); err != nil {
-			return err
-		}
-
-		// As `pkg.Types` has been reassigned (pointer), the facts are related to discarded types.
-		// The fact references need to be updated to use the new types.
-		if loadMode >= LoadModeTypesInfo {
-			for _, act := range lp.actions {
-				// If the action needs an analysis from source, the existing types related to cache are not used.
-				if act.needAnalyzeSource {
-					continue
-				}
-
-				// Resets the current facts and reload them from cache with the updated types.
-				if act.loadActionCachedFacts(true) {
-					continue
-				}
-
-				// This should not happen because the facts has been already successfully loaded in the initial facts loading.
-				// But it can happen if the cache is corrupted.
-				factsCacheDebugf("Reloading of facts for %s failed, analyze it from source later", act)
-				act.needAnalyzeSource = true
-				act.markDepsForAnalyzingSource()
-			}
-		}
-
-		return nil
+		return lp.loadFromSource(loadMode)
 	}
 
 	return nil
 }
 
-// hasAllFactsCached reports whether the package has facts and all of them are cached:
-// export data is only worth building to read cached facts.
-func (lp *loadingPackage) hasAllFactsCached() bool {
-	hasFacts := false
-
-	for _, act := range lp.actions {
-		if len(act.Analyzer.FactTypes) > 0 {
-			hasFacts = true
-		}
-
-		if !act.hasCachedFacts() {
-			return false
-		}
-	}
-
-	return hasFacts
-}
-
-func (lp *loadingPackage) ensureExportData() {
-	if lp.pkg.ExportFile != "" || lp.depLoader == nil {
-		return
-	}
-
-	err := lp.depLoader.LoadExportData(lp.pkg)
-	if err != nil {
-		lp.log.Warnf("Failed to load export data for %s: %v", lp.pkg, err)
-	}
-}
-
-// loadFromSourceWithoutCachedFacts type-checks the package from source and analyzes all its actions.
-func (lp *loadingPackage) loadFromSourceWithoutCachedFacts(loadMode LoadMode) error {
-	lp.pkg.Types = types.NewPackage(lp.pkg.PkgPath, lp.pkg.Name)
-
-	for _, act := range lp.actions {
-		act.needAnalyzeSource = true // can't be set in parallel
-
-		act.markDepsForAnalyzingSource()
-	}
-
-	return lp.loadFromSource(loadMode)
-}
-
-// loadFromSourceWithCachedFacts type-checks the package from source without reading its export data,
-// then reuses the facts of the actions that are cached.
+// loadFromSourceWithCachedFacts type-checks the package from source, then reuses the facts of the actions that are cached.
 func (lp *loadingPackage) loadFromSourceWithCachedFacts(loadMode LoadMode) error {
 	lp.pkg.Types = types.NewPackage(lp.pkg.PkgPath, lp.pkg.Name)
 
@@ -626,8 +475,6 @@ func (lp *loadingPackage) decUse(canClearTypes bool) {
 	lp.pkg.Syntax = nil
 	lp.pkg.TypesInfo = nil
 	lp.pkg.TypesSizes = nil
-
-	// Can't set lp.pkg.Imports to nil because of loadFromExportData.visit.
 
 	dependents := atomic.AddInt32(&lp.dependents, -1)
 	if dependents != 0 {
