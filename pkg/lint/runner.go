@@ -106,6 +106,9 @@ func NewRunner(log logutils.Log, cfg *config.Config, goenv *goutil.Env,
 
 			processors.NewDiff(&cfg.Issues),
 
+			// Must be before the Fixer and every processor that keeps the first of several issues.
+			processors.NewCanonicalOrder(),
+
 			// The fixer still needs to see paths for the issues that are relative to the current directory.
 			processors.NewFixer(cfg, log, fileCache, metaFormatter),
 

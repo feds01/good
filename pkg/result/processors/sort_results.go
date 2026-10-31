@@ -72,9 +72,10 @@ func (p SortResults) Process(issues []*result.Issue) ([]*result.Issue, error) {
 
 	comp := mergeComparators(cmps...)
 
-	slices.SortFunc(issues, func(a, b *result.Issue) int {
-		return comp(a, b)
-	})
+	// The configured comparators treat a missing line or column as equal to anything, which isn't a consistent order:
+	// start from a fixed order so that ties don't depend on the input order.
+	slices.SortFunc(issues, compareIssues)
+	slices.SortStableFunc(issues, comp)
 
 	return issues, nil
 }

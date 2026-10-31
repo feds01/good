@@ -67,7 +67,11 @@ func walkStringToIntMapSortedByValue(m map[string]int, walk func(k string, v int
 	}
 
 	sort.Slice(ss, func(i, j int) bool {
-		return ss[i].Value > ss[j].Value
+		if ss[i].Value != ss[j].Value {
+			return ss[i].Value > ss[j].Value
+		}
+
+		return ss[i].Key < ss[j].Key
 	})
 
 	for _, kv := range ss {
