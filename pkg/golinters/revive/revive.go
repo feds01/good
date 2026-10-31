@@ -132,6 +132,10 @@ func (w *wrapper) run(pass *analysis.Pass) ([]*goanalysis.Issue, error) {
 			continue
 		}
 
+		if isCgoImportFailure(pass, &failure) {
+			continue
+		}
+
 		issues = append(issues, w.toIssue(pass, &failure))
 	}
 
@@ -178,6 +182,31 @@ func (w *wrapper) toIssue(pass *analysis.Pass, failure *lint.Failure) *goanalysi
 	}
 
 	return goanalysis.NewIssue(issue, pass)
+}
+
+// isCgoImportFailure reports whether the failure is about the blank import that cgo puts in place of `import "C"`.
+// revive sees the cgo-processed file, in which that line is rewritten.
+func isCgoImportFailure(pass *analysis.Pass, failure *lint.Failure) bool {
+	if failure.RuleName != (&rule.BlankImportsRule{}).Name() {
+		return false
+	}
+
+	if tokenFileByName(pass, failure.Filename()) != nil {
+		return false
+	}
+
+	content, err := os.ReadFile(failure.Filename())
+	if err != nil {
+		return false
+	}
+
+	lines := bytes.Split(content, []byte("\n"))
+	line := failure.Position.Start.Line
+	if line < 1 || line > len(lines) {
+		return false
+	}
+
+	return bytes.HasPrefix(bytes.TrimSpace(lines[line-1]), []byte(`import "C"`))
 }
 
 func tokenFileByName(pass *analysis.Pass, name string) *token.File {
