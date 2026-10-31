@@ -22,6 +22,8 @@ var (
 )
 
 func main() {
+	configureGC()
+
 	info := createBuildInfo()
 
 	if err := commands.Execute(info); err != nil {
