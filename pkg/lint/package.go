@@ -212,10 +212,23 @@ func (l *PackageLoader) LoadCompiledGoFiles(ctx context.Context, pkg *packages.P
 		return fmt.Errorf("package variant %s can't be loaded on its own", pkg.ID)
 	}
 
+	// The C objects are only linked to find the dynamic imports, so they don't need to be optimized.
+	err := l.loadCompiledGoFiles(ctx, pkg, append(os.Environ(), cgoFlagsEnv(os.Getenv("CGO_CFLAGS"))))
+	if err != nil {
+		l.debugf("Retry cgo processing of %s with the default flags: %v", pkg.PkgPath, err)
+
+		return l.loadCompiledGoFiles(ctx, pkg, nil)
+	}
+
+	return nil
+}
+
+func (l *PackageLoader) loadCompiledGoFiles(ctx context.Context, pkg *packages.Package, env []string) error {
 	conf := &packages.Config{
 		Mode:       packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles,
 		Context:    ctx,
 		BuildFlags: l.makeBuildFlags(),
+		Env:        env,
 		Logf:       l.debugf,
 	}
 
@@ -231,6 +244,11 @@ func (l *PackageLoader) LoadCompiledGoFiles(ctx context.Context, pkg *packages.P
 	pkg.CompiledGoFiles = pkgs[0].CompiledGoFiles
 
 	return nil
+}
+
+// cgoFlagsEnv returns the CGO_CFLAGS setting that disables optimization on top of the current flags.
+func cgoFlagsEnv(cflags string) string {
+	return "CGO_CFLAGS=" + strings.TrimSpace(cflags+" -O0 -g0")
 }
 
 func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {
