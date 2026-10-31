@@ -3,6 +3,7 @@ package revive
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"go/token"
 	"os"
@@ -127,7 +128,13 @@ func (w *wrapper) run(pass *analysis.Pass) ([]*goanalysis.Issue, error) {
 	}
 
 	var issues []*goanalysis.Issue
+	var internalErrs []error
 	for failure := range failures {
+		if failure.IsInternal() {
+			internalErrs = append(internalErrs, errors.New(failure.Failure))
+			continue
+		}
+
 		if failure.Confidence < w.conf.Confidence {
 			continue
 		}
@@ -137,6 +144,10 @@ func (w *wrapper) run(pass *analysis.Pass) ([]*goanalysis.Issue, error) {
 		}
 
 		issues = append(issues, w.toIssue(pass, &failure))
+	}
+
+	if len(internalErrs) > 0 {
+		return nil, fmt.Errorf("revive: %w", errors.Join(internalErrs...))
 	}
 
 	return issues, nil
