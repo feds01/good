@@ -2,6 +2,7 @@ package linter
 
 import (
 	"go/ast"
+	"go/types"
 
 	"golang.org/x/tools/go/packages"
 
@@ -35,6 +36,10 @@ type DependencyLoader interface {
 
 	// LoadCompiledGoFiles sets pkg.CompiledGoFiles to the files with cgo processed.
 	LoadCompiledGoFiles(pkg *packages.Package) error
+
+	// LoadSupportPackage returns the types of a standard library package that is not part of the loaded packages,
+	// from its export data.
+	LoadSupportPackage(path string) (*types.Package, error)
 }
 
 func (c *Context) Settings() *config.LintersSettings {

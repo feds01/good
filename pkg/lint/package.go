@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ldez/grignotin/goenv"
+	"golang.org/x/tools/go/gcexportdata"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/golangci/golangci-lint/v2/pkg/config"
@@ -40,6 +41,10 @@ type PackageLoader struct {
 	goenv *goutil.Env
 
 	loadGuard *load.Guard
+
+	supportMu   sync.Mutex
+	supportFset *token.FileSet
+	supportView map[string]*types.Package
 
 	exportOnce  sync.Once
 	exportFiles map[string]string
@@ -249,6 +254,51 @@ func (l *PackageLoader) loadCompiledGoFiles(ctx context.Context, pkg *packages.P
 // cgoFlagsEnv returns the CGO_CFLAGS setting that disables optimization on top of the current flags.
 func cgoFlagsEnv(cflags string) string {
 	return "CGO_CFLAGS=" + strings.TrimSpace(cflags+" -O0 -g0")
+}
+
+// LoadSupportPackage returns the types of a package that is not in the loaded packages, from its export data.
+func (l *PackageLoader) LoadSupportPackage(ctx context.Context, path string) (*types.Package, error) {
+	l.supportMu.Lock()
+	defer l.supportMu.Unlock()
+
+	if tpkg := l.supportView[path]; tpkg != nil && tpkg.Complete() {
+		return tpkg, nil
+	}
+
+	conf := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedExportFile,
+		Context:    ctx,
+		BuildFlags: l.makeBuildFlags(),
+		Logf:       l.debugf,
+	}
+
+	pkgs, err := packages.Load(conf, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load with go/packages: %w", err)
+	}
+
+	if len(pkgs) != 1 || pkgs[0].ExportFile == "" {
+		return nil, fmt.Errorf("no export data for %s", path)
+	}
+
+	file, err := os.Open(pkgs[0].ExportFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the export data: %w", err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	reader, err := gcexportdata.NewReader(file) //nolint:staticcheck // the export data comes from `go list -export`, like in pkg/goanalysis
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the export data: %w", err)
+	}
+
+	if l.supportView == nil {
+		l.supportView = map[string]*types.Package{}
+		l.supportFset = token.NewFileSet()
+	}
+
+	return gcexportdata.Read(reader, l.supportFset, l.supportView, path)
 }
 
 func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {

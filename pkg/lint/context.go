@@ -3,6 +3,7 @@ package lint
 import (
 	"context"
 	"fmt"
+	"go/types"
 
 	"golang.org/x/tools/go/packages"
 
@@ -74,4 +75,8 @@ func (l *dependencyLoader) LoadExportData(pkg *packages.Package) error {
 
 func (l *dependencyLoader) LoadCompiledGoFiles(pkg *packages.Package) error {
 	return l.pkgLoader.LoadCompiledGoFiles(l.ctx, pkg)
+}
+
+func (l *dependencyLoader) LoadSupportPackage(path string) (*types.Package, error) {
+	return l.pkgLoader.LoadSupportPackage(l.ctx, path)
 }

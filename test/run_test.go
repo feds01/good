@@ -156,6 +156,18 @@ func TestCgoOk(t *testing.T) {
 		ExpectNoIssues()
 }
 
+// The dependency is type-checked from source with its cgo files processed on demand.
+func TestCgoDependency(t *testing.T) {
+	testshared.NewRunnerBuilder(t).
+		WithNoConfig().
+		WithArgs("--default=none", "-Egovet").
+		WithTargetPath(testdataDir, "cgo_dependency", "app").
+		Runner().
+		Install().
+		Run().
+		ExpectHasIssue("Printf format %d has arg \"text\" of wrong type string")
+}
+
 func TestCgoWithIssues(t *testing.T) {
 	binPath := testshared.InstallGolangciLint(t)
 

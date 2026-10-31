@@ -1,7 +1,9 @@
 package goanalysis
 
 import (
+	"errors"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,6 +61,10 @@ func (l *fakeDependencyLoader) LoadCompiledGoFiles(pkg *packages.Package) error 
 	pkg.CompiledGoFiles = []string{l.processedFile}
 
 	return nil
+}
+
+func (*fakeDependencyLoader) LoadSupportPackage(string) (*types.Package, error) {
+	return nil, errors.New("no support package in the fake loader")
 }
 
 func writeGoFile(t *testing.T, name, content string) string {
@@ -183,6 +189,23 @@ func Test_loadingPackage_loadImportedPackageWithFacts(t *testing.T) {
 
 		assert.Equal(t, 1, depLoader.exportDataCalls)
 		assert.NotNil(t, pkg.Types.Scope().Lookup("NoFacts"))
+	})
+
+	t.Run("loads from source when the export data is missing", func(t *testing.T) {
+		filename := writeGoFile(t, "dep.go", "package dep\n\nfunc NoExport() {}\n")
+
+		pkg := newDependency(filename)
+		depLoader := &fakeDependencyLoader{}
+		lp := newDependencyLoadingPackage(pkg, pkgCache, depLoader, cacheFactAnalyzer)
+
+		require.NoError(t, pkgCache.Put(pkg, cache.HashModeNeedAllDeps, factCacheKey(cacheFactAnalyzer), []Fact{}))
+
+		require.NoError(t, lp.loadImportedPackageWithFacts(LoadModeTypesInfo))
+
+		assert.Equal(t, 1, depLoader.exportDataCalls)
+		assert.Empty(t, pkg.Errors)
+		assert.NotNil(t, pkg.Types.Scope().Lookup("NoExport"))
+		assert.True(t, lp.actions[0].needAnalyzeSource, "facts are recomputed")
 	})
 
 	t.Run("loads source when only some facts are cached", func(t *testing.T) {
