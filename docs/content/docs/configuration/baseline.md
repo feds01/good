@@ -41,6 +41,11 @@ until `baseline --prune` is committed.
 `--no-baseline` reports every issue, for example to fix old code with `--fix`.
 
 `baseline` refuses to run on code that does not compile.
+Use `-v` to list the stale entries.
+
+A few linters report different issues from one run to the next (for example `canonicalheader`).
+Their issues show up as stale in some runs and as new in others: run `baseline` again to keep the union, and do not
+`--prune` (or use `--fail-on-stale-baseline`) on a project that has such findings in its baseline.
 
 ## File format
 
