@@ -81,16 +81,16 @@ func newRunner(prefix string, logger logutils.Log, pkgCache *cache.Cache, loadGu
 // It provides most of the logic for the main functions of both the
 // singlechecker and the multi-analysis commands.
 // It returns the appropriate exit code.
-func (r *runner) run(analyzers []*analysis.Analyzer, initialPackages []*packages.Package) ([]*Diagnostic,
-	[]error, map[*analysis.Pass]*packages.Package,
+func (r *runner) run(analyzers []*analysis.Analyzer, initialPackages []*packages.Package) (diags []*Diagnostic,
+	errs []error, passToPkg map[*analysis.Pass]*packages.Package, unfinishedPkgs map[*packages.Package]bool,
 ) {
 	debugf("Analyzing %d packages on load mode %s", len(initialPackages), r.loadMode)
 
-	roots := r.analyze(initialPackages, analyzers)
+	roots, unfinishedPkgs := r.analyze(initialPackages, analyzers)
 
-	diags, errs := extractDiagnostics(roots)
+	diags, errs = extractDiagnostics(roots)
 
-	return diags, errs, r.passToPkg
+	return diags, errs, r.passToPkg, unfinishedPkgs
 }
 
 type actKey struct {
@@ -225,7 +225,10 @@ func (r *runner) prepareAnalysis(pkgs []*packages.Package,
 	return initialPkgs, allActions, roots
 }
 
-func (r *runner) analyze(pkgs []*packages.Package, analyzers []*analysis.Analyzer) []*action {
+// analyze returns the root actions, and the packages with an action that failed or never ran, e.g. because
+// the analysis was canceled: nothing can be said about the findings of these packages.
+func (r *runner) analyze(pkgs []*packages.Package, analyzers []*analysis.Analyzer,
+) (rootActions []*action, unfinishedPkgs map[*packages.Package]bool) {
 	initialPkgs, actions, rootActions := r.prepareAnalysis(pkgs, analyzers)
 
 	actionPerPkg := map[*packages.Package][]*action{}
@@ -288,7 +291,18 @@ func (r *runner) analyze(pkgs []*packages.Package, analyzers []*analysis.Analyze
 
 	wg.Wait()
 
-	return rootActions
+	unfinishedPkgs = map[*packages.Package]bool{}
+
+	// act.Package is cleared once a package is released, so the packages come from actionPerPkg.
+	for pkg, pkgActions := range actionPerPkg {
+		for _, act := range pkgActions {
+			if act.Err != nil || !act.isDone() {
+				unfinishedPkgs[pkg] = true
+			}
+		}
+	}
+
+	return rootActions, unfinishedPkgs
 }
 
 func extractDiagnostics(roots []*action) (retDiags []*Diagnostic, retErrors []error) {

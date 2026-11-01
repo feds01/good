@@ -69,10 +69,6 @@ type dependencyLoader struct {
 	pkgLoader *PackageLoader
 }
 
-func (l *dependencyLoader) LoadExportData(pkg *packages.Package) error {
-	return l.pkgLoader.LoadExportData(l.ctx, pkg)
-}
-
 func (l *dependencyLoader) LoadCompiledGoFiles(pkg *packages.Package) error {
 	return l.pkgLoader.LoadCompiledGoFiles(l.ctx, pkg)
 }

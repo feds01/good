@@ -48,10 +48,6 @@ type PackageLoader struct {
 	supportMu   sync.Mutex
 	supportFset *token.FileSet
 	supportView map[string]*types.Package
-
-	exportOnce  sync.Once
-	exportFiles map[string]string
-	exportErr   error
 }
 
 // NewPackageLoader creates a new PackageLoader.
@@ -85,12 +81,11 @@ func (l *PackageLoader) Load(ctx context.Context, linters []*linter.Config) (pkg
 func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.LoadMode) ([]*packages.Package, error) {
 	l.prepareBuildContext()
 
-	// Export data makes `go list` compile every dependency, and compiled files (also requested by the types sizes)
-	// make it run the C compiler for every cgo dependency.
-	// Both are skipped here: the export data is loaded on demand by LoadExportData,
-	// and dependencies are type-checked from their original files.
-	isLazyExport := loadMode&packages.NeedExportFile != 0
-	if isLazyExport {
+	// NeedExportFile only marks that the packages are type-checked: export data would make `go list` compile every
+	// dependency, and compiled files (also requested by the types sizes) would make it run the C compiler for every
+	// cgo dependency. Both are skipped, dependencies are type-checked from their original files.
+	isTypedLoad := loadMode&packages.NeedExportFile != 0
+	if isTypedLoad {
 		loadMode &^= packages.NeedExportFile | packages.NeedCompiledGoFiles | packages.NeedTypesSizes
 	}
 
@@ -99,8 +94,8 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 		return nil, err
 	}
 
-	if isLazyExport {
-		pkgs, err = l.completeLazyPackages(ctx, loadMode, pkgs)
+	if isTypedLoad {
+		pkgs, err = l.completeSkippedData(ctx, loadMode, pkgs)
 		if err != nil {
 			return nil, err
 		}
@@ -124,8 +119,8 @@ func (l *PackageLoader) loadPackages(ctx context.Context, loadMode packages.Load
 	return l.filterTestMainPackages(pkgs), nil
 }
 
-// completeLazyPackages sets the data that the lazy listing skips: the compiled files and the types sizes.
-func (l *PackageLoader) completeLazyPackages(ctx context.Context, loadMode packages.LoadMode,
+// completeSkippedData sets the data that the listing skips: the compiled files and the types sizes.
+func (l *PackageLoader) completeSkippedData(ctx context.Context, loadMode packages.LoadMode,
 	pkgs []*packages.Package,
 ) ([]*packages.Package, error) {
 	if hasCgoFiles(pkgs, l.fileCache) {
@@ -199,22 +194,6 @@ func (l *PackageLoader) listPackages(ctx context.Context, loadMode packages.Load
 	}
 
 	return pkgs, nil
-}
-
-// LoadExportData sets pkg.ExportFile.
-// The first call builds the export data of all packages, the next calls reuse it.
-func (l *PackageLoader) LoadExportData(ctx context.Context, pkg *packages.Package) error {
-	l.exportOnce.Do(func() {
-		l.exportFiles, l.exportErr = l.listExportFiles(ctx)
-	})
-
-	if l.exportErr != nil {
-		return l.exportErr
-	}
-
-	pkg.ExportFile = l.exportFiles[pkg.ID]
-
-	return nil
 }
 
 // LoadCompiledGoFiles sets pkg.CompiledGoFiles to the files with cgo processed.
@@ -305,24 +284,6 @@ func (l *PackageLoader) LoadSupportPackage(ctx context.Context, path string) (*t
 	}
 
 	return gcexportdata.Read(reader, l.supportFset, l.supportView, path)
-}
-
-func (l *PackageLoader) listExportFiles(ctx context.Context) (map[string]string, error) {
-	// Only with cgo processed, go list adds the runtime/cgo import to the cgo packages.
-	loadMode := packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedCompiledGoFiles
-
-	pkgs, err := l.listPackages(ctx, loadMode)
-	if err != nil {
-		return nil, err
-	}
-
-	exportFiles := map[string]string{}
-
-	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
-		exportFiles[pkg.ID] = pkg.ExportFile
-	})
-
-	return exportFiles, nil
 }
 
 // hasCgoFiles reports whether one of the packages imports "C".

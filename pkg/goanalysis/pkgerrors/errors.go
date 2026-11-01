@@ -3,6 +3,8 @@ package pkgerrors
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 
@@ -25,6 +27,8 @@ func BuildIssuesFromIllTypedError(errs []error, lintCtx *linter.Context) ([]*res
 
 	var other error
 
+	reportedPaths := illTypedPaths(lintCtx)
+
 	for _, err := range errs {
 		var ill *IllTypedError
 		if !errors.As(err, &ill) {
@@ -34,7 +38,7 @@ func BuildIssuesFromIllTypedError(errs []error, lintCtx *linter.Context) ([]*res
 			continue
 		}
 
-		for _, err := range extractErrors(ill.Pkg) {
+		for _, err := range dropReportedImportErrors(ill.Pkg, extractErrors(ill.Pkg), reportedPaths) {
 			issue, perr := parseError(err)
 			if perr != nil { // failed to parse
 				if uniqReportedIssues[err.Msg] {
@@ -62,4 +66,40 @@ func BuildIssuesFromIllTypedError(errs []error, lintCtx *linter.Context) ([]*res
 	}
 
 	return issues, nil
+}
+
+// illTypedPaths returns the paths of the analyzed packages that don't type-check: their errors are reported on their own.
+// The package that an error is attributed to depends on which analyzer fails first, so the errors are not used for this.
+func illTypedPaths(lintCtx *linter.Context) map[string]bool {
+	paths := map[string]bool{}
+
+	for _, pkgs := range [][]*packages.Package{lintCtx.Packages, lintCtx.OriginalPackages} {
+		for _, pkg := range pkgs {
+			if pkg.IllTyped {
+				paths[pkg.PkgPath] = true
+			}
+		}
+	}
+
+	return paths
+}
+
+// dropReportedImportErrors drops all the errors of a package that fails to import a package that is reported on its own
+// (matched by path, as the analyzed variant of a package with tests is not the one the dependants import):
+// the dependants of a package with a type error would otherwise each repeat it,
+// and the other errors they get are follow-ups of the invalid import.
+func dropReportedImportErrors(pkg *packages.Package, pkgErrs []packages.Error, reportedPaths map[string]bool) []packages.Error {
+	for path, imp := range pkg.Imports {
+		if !reportedPaths[imp.PkgPath] {
+			continue
+		}
+
+		prefix := "could not import " + path + " ("
+
+		if slices.ContainsFunc(pkgErrs, func(pkgErr packages.Error) bool { return strings.HasPrefix(pkgErr.Msg, prefix) }) {
+			return nil
+		}
+	}
+
+	return pkgErrs
 }

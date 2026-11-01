@@ -122,7 +122,7 @@ func TestPackageLoader_LoadCompiledGoFiles_variant(t *testing.T) {
 	require.Error(t, loader.LoadCompiledGoFiles(context.Background(), pkg))
 }
 
-func TestPackageLoader_loadPackages_lazy(t *testing.T) {
+func TestPackageLoader_loadPackages_typed(t *testing.T) {
 	dir := t.TempDir()
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/lazy\n\ngo 1.21\n"), 0o600))
@@ -142,14 +142,11 @@ func TestPackageLoader_loadPackages_lazy(t *testing.T) {
 
 	pkg := pkgs[0]
 
-	assert.Empty(t, pkg.ExportFile, "export data is loaded on demand")
+	assert.Empty(t, pkg.ExportFile, "export data is not built")
 	assert.NotNil(t, pkg.TypesSizes)
 	assert.Equal(t, pkg.GoFiles, pkg.CompiledGoFiles)
 	assert.NotNil(t, pkg.Imports["fmt"])
 	assert.Empty(t, pkg.Imports["fmt"].ExportFile)
-
-	require.NoError(t, loader.LoadExportData(t.Context(), pkg.Imports["fmt"]))
-	assert.NotEmpty(t, pkg.Imports["fmt"].ExportFile)
 }
 
 func Test_cgoFlagsEnv(t *testing.T) {
